@@ -1,6 +1,7 @@
 #include "MyMesh.h"
 
 #include <Arduino.h> // needed for PlatformIO
+#include <limits.h>
 #include <Mesh.h>
 
 #define CMD_APP_START                 1
@@ -24,7 +25,7 @@
 #define CMD_REBOOT                    19
 #define CMD_GET_BATT_AND_STORAGE      20   // was CMD_GET_BATTERY_VOLTAGE
 #define CMD_SET_TUNING_PARAMS         21
-#define CMD_DEVICE_QUERY              22
+#define CMD_DEVICE_QEURY              22
 #define CMD_EXPORT_PRIVATE_KEY        23
 #define CMD_IMPORT_PRIVATE_KEY        24
 #define CMD_SEND_RAW_DATA             25
@@ -61,7 +62,6 @@
 #define CMD_SEND_CHANNEL_DATA         62
 #define CMD_SET_DEFAULT_FLOOD_SCOPE   63
 #define CMD_GET_DEFAULT_FLOOD_SCOPE   64
-#define CMD_SEND_RAW_PACKET           65
 
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -81,7 +81,7 @@
 #define RESP_CODE_NO_MORE_MESSAGES    10 // a reply to CMD_SYNC_NEXT_MESSAGE
 #define RESP_CODE_EXPORT_CONTACT      11
 #define RESP_CODE_BATT_AND_STORAGE    12 // a reply to a CMD_GET_BATT_AND_STORAGE
-#define RESP_CODE_DEVICE_INFO         13 // a reply to CMD_DEVICE_QUERY
+#define RESP_CODE_DEVICE_INFO         13 // a reply to CMD_DEVICE_QEURY
 #define RESP_CODE_PRIVATE_KEY         14 // a reply to CMD_EXPORT_PRIVATE_KEY
 #define RESP_CODE_DISABLED            15
 #define RESP_CODE_CONTACT_MSG_RECV_V3 16 // a reply to CMD_SYNC_NEXT_MESSAGE (ver >= 3)
@@ -105,6 +105,15 @@
 #define DIRECT_SEND_PERHOP_FACTOR       6.0f
 #define DIRECT_SEND_PERHOP_EXTRA_MILLIS 250
 #define LAZY_CONTACTS_WRITE_DELAY       5000
+#define GPS_TRACKER_ECO_MIN_INTERVAL_S  60UL
+#define GPS_TRACKER_ECO_WAKE_MIN_MS     12000UL
+#define GPS_TRACKER_ECO_WAKE_MAX_MS     45000UL
+#define GPS_TRACKER_ECO_RETRY_MS        5000UL
+#define GPS_TRACKER_ECO_WAKE_GRACE_MS   20000UL
+#define GPS_TRACKER_ECO_STATIONARY_CYCLES 3
+#define DISPLAY_TIMEOUT_MAX_SECONDS     3600U
+
+#define DEFAULT_CLIENT_NAME             "Client"
 
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
 
@@ -144,6 +153,65 @@
 #define AUTO_ADD_REPEATER         (1 << 2)  // 0x04 - auto-add Repeater (ADV_TYPE_REPEATER)
 #define AUTO_ADD_ROOM_SERVER      (1 << 3)  // 0x08 - auto-add Room Server (ADV_TYPE_ROOM)
 #define AUTO_ADD_SENSOR           (1 << 4)  // 0x10 - auto-add Sensor (ADV_TYPE_SENSOR)
+
+static bool isNameWhitespace(char c) {
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static void buildDefaultPublicIdName(char* dest, size_t dest_size, const mesh::Identity& identity) {
+  char pub_key_hex[10];
+  mesh::Utils::toHex(pub_key_hex, identity.pub_key, 4);
+  StrHelper::strncpy(dest, pub_key_hex, dest_size);
+}
+
+static bool isTechnicalDefaultNodeName(const char* name, const mesh::Identity& identity) {
+  if (!name || name[0] == 0) return true;
+  if (strcmp(name, "NONAME") == 0 || strcmp(name, "@@MAC") == 0 || strcmp(name, "Companion") == 0) return true;
+
+  char default_name[10];
+  buildDefaultPublicIdName(default_name, sizeof(default_name), identity);
+  return strcmp(name, default_name) == 0;
+}
+
+static bool sanitizeNodeName(const char* src, char* dest, size_t dest_size) {
+  if (!src || !dest || dest_size == 0) return false;
+
+  while (*src && isNameWhitespace(*src)) {
+    src++;
+  }
+
+  size_t len = strlen(src);
+  while (len > 0 && isNameWhitespace(src[len - 1])) {
+    len--;
+  }
+
+  size_t out = 0;
+  for (size_t i = 0; i < len && out + 1 < dest_size; ++i) {
+    unsigned char ch = static_cast<unsigned char>(src[i]);
+    if (ch < 0x20 || ch == 0x7F) {
+      continue;
+    }
+    dest[out++] = static_cast<char>(ch);
+  }
+  dest[out] = 0;
+  return out > 0;
+}
+
+static bool appendCStringField(char*& dest, size_t& remaining, const char* text) {
+  if (!dest || remaining == 0 || !text) {
+    return false;
+  }
+
+  size_t len = strlen(text);
+  if (len + 1 > remaining) {
+    return false;
+  }
+
+  memcpy(dest, text, len + 1);
+  dest += len;
+  remaining -= len + 1;
+  return true;
+}
 
 void MyMesh::writeOKFrame() {
   uint8_t buf[1];
@@ -400,6 +468,163 @@ int MyMesh::getRecentlyHeard(AdvertPath dest[], int max_num) {
   return max_num;
 }
 
+bool MyMesh::sendSelfAdvertFromUi(bool flood) {
+  mesh::Packet* pkt;
+  if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+    pkt = createSelfAdvert(_prefs.node_name);
+  } else {
+    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+  }
+
+  if (!pkt) {
+    return false;
+  }
+
+  if (flood) {
+    TransportKey default_scope;
+    memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+    sendFloodScoped(default_scope, pkt, 0);
+  } else {
+    sendZeroHop(pkt);
+  }
+  return true;
+}
+
+bool MyMesh::applyCurrentRadioPrefs() {
+  _prefs.freq = constrain(_prefs.freq, 150.0f, 2500.0f);
+  _prefs.bw = constrain(_prefs.bw, 7.8f, 500.0f);
+  _prefs.sf = constrain(_prefs.sf, 5, 12);
+  _prefs.cr = constrain(_prefs.cr, 5, 8);
+  _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
+  _prefs.rx_boosted_gain = constrain(_prefs.rx_boosted_gain, 0, 1);
+
+  uint32_t freq_khz = (uint32_t)(_prefs.freq * 1000.0f);
+  if (_prefs.client_repeat && !isValidClientRepeatFreq(freq_khz)) {
+    return false;
+  }
+
+  radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  radio_set_tx_power(_prefs.tx_power_dbm);
+  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
+  savePrefs();
+  return true;
+}
+
+void MyMesh::applyPowerPrefs(bool persist) {
+  _prefs.power_saving_mode = constrain(_prefs.power_saving_mode, 0, 1);
+#if defined(USE_SX1262) || defined(USE_SX1268)
+  _prefs.rx_boosted_gain = _prefs.power_saving_mode ? 0 : 1;
+  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
+#endif
+  if (_serial) {
+    _serial->setPowerSaveMode(_prefs.power_saving_mode != 0);
+  }
+#if FEATURE_GPS_TRACKER
+  if (!_prefs.power_saving_mode) {
+    resetTrackerGpsEcoState(true);
+  }
+#endif
+  if (persist) {
+    savePrefs();
+  }
+}
+
+bool MyMesh::isTrackerGpsEcoSleeping() const {
+#if FEATURE_GPS_TRACKER
+  return _gps_tracker_eco_sleeping;
+#else
+  return false;
+#endif
+}
+
+uint32_t MyMesh::getTrackerGpsEcoWakeSeconds() const {
+#if FEATURE_GPS_TRACKER
+  if (!_gps_tracker_eco_sleeping || _gps_tracker_next_wake_at == 0) {
+    return 0;
+  }
+  unsigned long now = _ms->getMillis();
+  if (millisHasNowPassed(_gps_tracker_next_wake_at)) {
+    return 0;
+  }
+  unsigned long remaining_ms = _gps_tracker_next_wake_at - now;
+  return static_cast<uint32_t>((remaining_ms + 999UL) / 1000UL);
+#else
+  return 0;
+#endif
+}
+
+bool MyMesh::toggleContactFavourite(const uint8_t* pub_key) {
+  ContactInfo* contact = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (!contact) {
+    return false;
+  }
+
+  contact->flags ^= 0x01;
+  contact->lastmod = getRTCClock()->getCurrentTime();
+  saveContacts();
+  return true;
+}
+
+bool MyMesh::resetContactPathByKey(const uint8_t* pub_key) {
+  ContactInfo* contact = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (!contact) {
+    return false;
+  }
+
+  resetPathTo(*contact);
+  contact->lastmod = getRTCClock()->getCurrentTime();
+  saveContacts();
+  return true;
+}
+
+bool MyMesh::removeContactByKey(const uint8_t* pub_key) {
+  ContactInfo* contact = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (!contact || !removeContact(*contact)) {
+    return false;
+  }
+
+  _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE);
+  saveContacts();
+  return true;
+}
+
+int MyMesh::getNumConfiguredChannels() {
+  int count = 0;
+  ChannelDetails channel;
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (getChannel(i, channel) && channel.name[0] != 0) {
+      count++;
+    }
+  }
+  return count;
+}
+
+bool MyMesh::getConfiguredChannelByOrdinal(int ordinal, int& slot_idx, ChannelDetails& channel) {
+  int count = 0;
+  ChannelDetails curr;
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (!getChannel(i, curr) || curr.name[0] == 0) {
+      continue;
+    }
+    if (count == ordinal) {
+      slot_idx = i;
+      channel = curr;
+      return true;
+    }
+    count++;
+  }
+  return false;
+}
+
+bool MyMesh::removeChannelByIdx(int idx) {
+  ChannelDetails empty = {};
+  if (!setChannel(idx, empty)) {
+    return false;
+  }
+  saveChannels();
+  return true;
+}
+
 void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
   out_frame[0] = PUSH_CODE_PATH_UPDATED;
   memcpy(&out_frame[1], contact.id.pub_key, PUB_KEY_SIZE);
@@ -480,6 +705,14 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet* packet) {
+#if FEATURE_GPS_TRACKER
+  if (packet->getPayloadType() == PAYLOAD_TYPE_ADVERT) {
+    uint8_t hop_limit = 0;
+    if (gps_tracker::decodeTrackerHopLimit(packet->payload, packet->payload_len, hop_limit)) {
+      return hop_limit > 0 && packet->getPathHashCount() < hop_limit;
+    }
+  }
+#endif
   return _prefs.client_repeat != 0;
 }
 
@@ -496,28 +729,533 @@ void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint3
 
 void MyMesh::sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis) {
   // TODO: dynamic send_scope, depending on recipient and current 'home' Region
-  if (send_unscoped) {
-    sendFlood(pkt, delay_millis, _prefs.path_hash_mode + 1);  // app has explicitly requested un-scoped
-  } else {
-    TransportKey default_scope;
-    memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+  TransportKey default_scope;
+  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
 
-    auto scope = send_scope.isNull() ? &default_scope : &send_scope;
-    sendFloodScoped(*scope, pkt, delay_millis);
-  }
+  auto scope = send_scope.isNull() ? &default_scope : &send_scope;
+  sendFloodScoped(*scope, pkt, delay_millis);
 }
 void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis) {
   // TODO: have per-channel send_scope
-  if (send_unscoped) {
-    sendFlood(pkt, delay_millis, _prefs.path_hash_mode + 1);  // app has explicitly requested un-scoped
-  } else {
-    TransportKey default_scope;
-    memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+  TransportKey default_scope;
+  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
 
-    auto scope = send_scope.isNull() ? &default_scope : &send_scope;
-    sendFloodScoped(*scope, pkt, delay_millis);
+  auto scope = send_scope.isNull() ? &default_scope : &send_scope;
+  sendFloodScoped(*scope, pkt, delay_millis);
+}
+
+#if FEATURE_GPS_TRACKER
+bool MyMesh::shouldUseAdaptiveGpsEco() const {
+#ifdef WIO_TRACKER_L1
+  return false;
+#endif
+  if (!_prefs.power_saving_mode || !_prefs.gps_tracker_active) {
+    return false;
+  }
+  if (_prefs.gps_tracker_interval < GPS_TRACKER_ECO_MIN_INTERVAL_S) {
+    return false;
+  }
+  if (board.isExternalPowered()) {
+    return false;
+  }
+  if (_serial && _serial->isConnected()) {
+    return false;
+  }
+  return true;
+}
+
+bool MyMesh::isTrackerGpsRuntimeEnabled() const {
+#if ENV_INCLUDE_GPS == 1
+  const char* value = sensors.getSettingByKey("gps");
+  return value && strcmp(value, "1") == 0;
+#else
+  return false;
+#endif
+}
+
+void MyMesh::setTrackerGpsRuntimeEnabled(bool enabled) {
+#if ENV_INCLUDE_GPS == 1
+  if (isTrackerGpsRuntimeEnabled() == enabled) {
+    return;
+  }
+  sensors.setSettingValue("gps", enabled ? "1" : "0");
+  if (enabled) {
+    _gps_tracker_runtime_enabled_at = _ms->getMillis();
+  } else {
+    _gps_tracker_runtime_enabled_at = 0;
+  }
+#else
+  (void)enabled;
+#endif
+}
+
+void MyMesh::resetTrackerGpsEcoState(bool restore_runtime_gps) {
+  _gps_tracker_eco_sleeping = false;
+  _gps_tracker_next_wake_at = 0;
+  _gps_tracker_fix_retry_deadline = 0;
+  _gps_tracker_stationary_cycles = 0;
+  if (!restore_runtime_gps) {
+    _gps_tracker_runtime_enabled_at = isTrackerGpsRuntimeEnabled() ? _ms->getMillis() : 0;
+  }
+  if (restore_runtime_gps) {
+    setTrackerGpsRuntimeEnabled(_prefs.gps_enabled != 0);
   }
 }
+
+unsigned long MyMesh::getTrackerGpsEcoWakeLeadMillis() const {
+  unsigned long interval_ms = static_cast<unsigned long>(_prefs.gps_tracker_interval) * 1000UL;
+  unsigned long lead = interval_ms / 3UL;
+  if (lead < GPS_TRACKER_ECO_WAKE_MIN_MS) {
+    lead = GPS_TRACKER_ECO_WAKE_MIN_MS;
+  }
+  if (lead > GPS_TRACKER_ECO_WAKE_MAX_MS) {
+    lead = GPS_TRACKER_ECO_WAKE_MAX_MS;
+  }
+  if (lead >= interval_ms && interval_ms > 4000UL) {
+    lead = interval_ms / 2UL;
+  }
+  return lead;
+}
+
+void MyMesh::enterTrackerGpsEcoSleep() {
+  if (!shouldUseAdaptiveGpsEco() || _gps_tracker_next_send_at == 0) {
+    return;
+  }
+
+  if (_gps_tracker_runtime_enabled_at != 0 &&
+      !millisHasNowPassed(_gps_tracker_runtime_enabled_at + GPS_TRACKER_ECO_WAKE_GRACE_MS)) {
+    return;
+  }
+
+  unsigned long now = _ms->getMillis();
+  unsigned long lead_ms = getTrackerGpsEcoWakeLeadMillis();
+  unsigned long wake_at = _gps_tracker_next_send_at > lead_ms ? (_gps_tracker_next_send_at - lead_ms) : now + 2000UL;
+  if (wake_at <= now + 1000UL) {
+    wake_at = now + 2000UL;
+  }
+
+  setTrackerGpsRuntimeEnabled(false);
+  _gps_tracker_eco_sleeping = true;
+  _gps_tracker_next_wake_at = wake_at;
+  _gps_tracker_fix_retry_deadline = 0;
+}
+
+void MyMesh::initGpsTrackerPrefs() {
+  _prefs.gps_tracker_active = _prefs.gps_tracker_active ? 1 : 0;
+  _prefs.gps_tracker_movement_mode = _prefs.gps_tracker_movement_mode ? 1 : 0;
+  _prefs.gps_tracker_position_sharing = _prefs.gps_tracker_position_sharing ? 1 : 0;
+  if (_prefs.gps_tracker_hop_limit > 15) {
+    _prefs.gps_tracker_hop_limit = 15;
+  }
+  if (_prefs.gps_tracker_min_movement_m == 0) {
+    _prefs.gps_tracker_min_movement_m = GPS_TRACKER_MIN_MOVEMENT_M_DEFAULT;
+  }
+  if (_prefs.gps_tracker_fix_timeout_s == 0) {
+    _prefs.gps_tracker_fix_timeout_s = GPS_TRACKER_FIX_TIMEOUT_DEFAULT;
+  }
+  if (_prefs.gps_tracker_history_max == 0 || _prefs.gps_tracker_history_max > GPS_TRACKER_HISTORY_MAX) {
+    _prefs.gps_tracker_history_max = GPS_TRACKER_HISTORY_MAX;
+  }
+  if (_prefs.gps_tracker_interval == 0) {
+    _prefs.gps_tracker_interval = GPS_TRACKER_INTERVAL_DEFAULT;
+  }
+  if (_prefs.gps_tracker_interval > 86400UL) {
+    _prefs.gps_tracker_interval = 86400UL;
+  }
+}
+
+bool MyMesh::captureGpsTrackerRecord(gps_tracker::Record& record) const {
+  memset(&record, 0, sizeof(record));
+  record.timestamp = getRTCClock()->getCurrentTime();
+  record.battery_pct = gps_tracker::batteryPctFromMv(board.getBattMilliVolts());
+
+#if ENV_INCLUDE_GPS == 1
+  auto* location = sensors.getLocationProvider();
+  if (!location || !location->isEnabled() || !location->isValid()) {
+    return false;
+  }
+
+  record.latitude_e6 = static_cast<int32_t>(location->getLatitude());
+  record.longitude_e6 = static_cast<int32_t>(location->getLongitude());
+
+  long altitude_m = location->getAltitude() / 1000L;
+  if (altitude_m > INT16_MAX) altitude_m = INT16_MAX;
+  if (altitude_m < INT16_MIN) altitude_m = INT16_MIN;
+  record.altitude_m = static_cast<int16_t>(altitude_m);
+
+  long satellites = location->satellitesCount();
+  if (satellites < 0) satellites = 0;
+  if (satellites > 255) satellites = 255;
+  record.satellites = static_cast<uint8_t>(satellites);
+  record.hdop_x10 = 0;
+  record.flags = gps_tracker::FLAG_FIX_VALID;
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool MyMesh::sendGpsTrackerAdvert(const gps_tracker::Record& record, bool moving, bool force_share) {
+  if (!_prefs.gps_tracker_position_sharing && !force_share) {
+    return false;
+  }
+
+  uint8_t app_data[MAX_ADVERT_DATA_SIZE];
+  AdvertDataBuilder builder(
+    ADV_TYPE_SENSOR,
+    _prefs.node_name,
+    static_cast<double>(record.latitude_e6) / 1000000.0,
+    static_cast<double>(record.longitude_e6) / 1000000.0
+  );
+  uint16_t feat1 = (static_cast<uint16_t>(record.battery_pct) << 8) | record.satellites;
+  builder.setFeat1(feat1);
+  builder.setFeat2(gps_tracker::encodeTrackerFeat2(_prefs.gps_tracker_hop_limit));
+
+  uint8_t app_data_len = builder.encodeTo(app_data);
+  mesh::Packet* pkt = createAdvert(self_id, app_data, app_data_len);
+  if (!pkt) {
+    return false;
+  }
+
+  TransportKey default_scope;
+  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+  auto scope = send_scope.isNull() ? &default_scope : &send_scope;
+  sendFloodScoped(*scope, pkt, 0);
+  return true;
+}
+
+void MyMesh::sendGpsTrackerErrorJson(const char* code) {
+  char line[96];
+  snprintf(line, sizeof(line), "{\"type\":\"error\",\"code\":\"%s\"}\n", code);
+  gps_tracker::writeJsonText(*_serial, line);
+}
+
+void MyMesh::sendGpsTrackerStatusJson() {
+  gps_tracker::Record current;
+  bool has_fix = captureGpsTrackerRecord(current);
+  if (has_fix) {
+    _gps_tracker_last_fix_at = _ms->getMillis();
+  }
+  uint32_t eco_wake_s = getTrackerGpsEcoWakeSeconds();
+
+  uint32_t last_fix_age = 0;
+  if (!has_fix && _gps_tracker_last_fix_at > 0) {
+    last_fix_age = (_ms->getMillis() - _gps_tracker_last_fix_at) / 1000UL;
+  }
+
+  char escaped_name[80];
+  gps_tracker::escapeJsonString(_prefs.node_name, escaped_name, sizeof(escaped_name));
+
+  char line[416];
+  if (has_fix) {
+    snprintf(
+      line,
+      sizeof(line),
+      "{\"type\":\"gps_status\",\"name\":\"%s\",\"active\":%s,\"share\":%s,\"power_save\":%s,\"eco_sleep\":%s,\"wake_in\":%lu,\"fix\":true,\"interval\":%lu,\"hop_limit\":%u,\"history\":%u,\"history_max\":%u,\"movement_m\":%u,\"lat\":%.6f,\"lon\":%.6f,\"alt\":%d,\"sats\":%u,\"bat\":%u,\"display_timeout_s\":%u}\n",
+      escaped_name,
+      _prefs.gps_tracker_active ? "true" : "false",
+      _prefs.gps_tracker_position_sharing ? "true" : "false",
+      _prefs.power_saving_mode ? "true" : "false",
+      _gps_tracker_eco_sleeping ? "true" : "false",
+      static_cast<unsigned long>(eco_wake_s),
+      static_cast<unsigned long>(_prefs.gps_tracker_interval),
+      static_cast<unsigned>(_prefs.gps_tracker_hop_limit),
+      static_cast<unsigned>(_gps_tracker_store.count()),
+      static_cast<unsigned>(_gps_tracker_store.capacity()),
+      static_cast<unsigned>(_prefs.gps_tracker_min_movement_m),
+      static_cast<double>(current.latitude_e6) / 1000000.0,
+      static_cast<double>(current.longitude_e6) / 1000000.0,
+      static_cast<int>(current.altitude_m),
+      static_cast<unsigned>(current.satellites),
+      static_cast<unsigned>(current.battery_pct),
+      static_cast<unsigned>(_prefs.display_timeout_s)
+    );
+  } else {
+    snprintf(
+      line,
+      sizeof(line),
+      "{\"type\":\"gps_status\",\"name\":\"%s\",\"active\":%s,\"share\":%s,\"power_save\":%s,\"eco_sleep\":%s,\"wake_in\":%lu,\"fix\":false,\"interval\":%lu,\"hop_limit\":%u,\"history\":%u,\"history_max\":%u,\"movement_m\":%u,\"last_fix_age\":%lu,\"bat\":%u,\"display_timeout_s\":%u}\n",
+      escaped_name,
+      _prefs.gps_tracker_active ? "true" : "false",
+      _prefs.gps_tracker_position_sharing ? "true" : "false",
+      _prefs.power_saving_mode ? "true" : "false",
+      _gps_tracker_eco_sleeping ? "true" : "false",
+      static_cast<unsigned long>(eco_wake_s),
+      static_cast<unsigned long>(_prefs.gps_tracker_interval),
+      static_cast<unsigned>(_prefs.gps_tracker_hop_limit),
+      static_cast<unsigned>(_gps_tracker_store.count()),
+      static_cast<unsigned>(_gps_tracker_store.capacity()),
+      static_cast<unsigned>(_prefs.gps_tracker_min_movement_m),
+      static_cast<unsigned long>(last_fix_age),
+      static_cast<unsigned>(gps_tracker::batteryPctFromMv(board.getBattMilliVolts())),
+      static_cast<unsigned>(_prefs.display_timeout_s)
+    );
+  }
+  gps_tracker::writeJsonText(*_serial, line);
+}
+
+void MyMesh::sendGpsTrackerHistoryJson(uint16_t limit) {
+  if (limit == 0 || limit > _prefs.gps_tracker_history_max) {
+    limit = _prefs.gps_tracker_history_max;
+  }
+
+  // Keep the history staging buffer off the FreeRTOS loop stack.
+  static gps_tracker::Record records[GPS_TRACKER_HISTORY_MAX];
+  uint16_t count = _gps_tracker_store.copyRecent(limit, records, GPS_TRACKER_HISTORY_MAX);
+
+  char line[96];
+  snprintf(line, sizeof(line), "{\"type\":\"track_history_start\",\"count\":%u}\n", static_cast<unsigned>(count));
+  gps_tracker::writeJsonText(*_serial, line);
+
+  for (int i = static_cast<int>(count); i > 0; --i) {
+    gps_tracker::writeJsonRecord(*_serial, records[i - 1], true, "track_point", false);
+  }
+
+  snprintf(line, sizeof(line), "{\"type\":\"track_history_end\",\"count\":%u}\n", static_cast<unsigned>(count));
+  gps_tracker::writeJsonText(*_serial, line);
+}
+
+bool MyMesh::runGpsTrackerCycle(bool force_share, bool* moving_out) {
+  gps_tracker::Record record;
+  if (!captureGpsTrackerRecord(record)) {
+    return false;
+  }
+
+  _gps_tracker_last_fix_at = _ms->getMillis();
+
+  bool moving = true;
+  if (_gps_tracker_has_last_saved) {
+    float moved = gps_tracker::distanceMeters(
+      _gps_tracker_last_saved.latitude_e6,
+      _gps_tracker_last_saved.longitude_e6,
+      record.latitude_e6,
+      record.longitude_e6
+    );
+    moving = moved >= _prefs.gps_tracker_min_movement_m;
+  }
+
+  if (_gps_tracker_has_last_saved && _prefs.gps_tracker_movement_mode && !moving && !force_share) {
+    if (moving_out) {
+      *moving_out = false;
+    }
+    return true;
+  }
+
+  if (moving_out) {
+    *moving_out = moving;
+  }
+
+  bool should_store = !_gps_tracker_has_last_saved || !_prefs.gps_tracker_movement_mode || moving;
+  if (should_store) {
+    if (moving) {
+      record.flags |= gps_tracker::FLAG_MOVING;
+    }
+    if (_prefs.gps_tracker_position_sharing || force_share) {
+      record.flags |= gps_tracker::FLAG_SHARED;
+    }
+
+    if (_gps_tracker_store.append(record)) {
+      _gps_tracker_last_saved = record;
+      _gps_tracker_has_last_saved = true;
+    }
+  }
+
+  return sendGpsTrackerAdvert(record, moving, force_share) || should_store;
+}
+
+bool MyMesh::handleGpsTrackerJsonFrame(size_t len) {
+  cmd_frame[len] = 0;
+  const char* json = reinterpret_cast<const char*>(cmd_frame);
+
+  if (strstr(json, "\"cmd\":\"get_gps_status\"")) {
+    sendGpsTrackerStatusJson();
+    return true;
+  }
+  if (strstr(json, "\"cmd\":\"get_track_history\"")) {
+    uint16_t limit = static_cast<uint16_t>(gps_tracker::extractUInt(json, "limit", _prefs.gps_tracker_history_max));
+    sendGpsTrackerHistoryJson(limit);
+    return true;
+  }
+  if (strstr(json, "\"cmd\":\"clear_track_history\"")) {
+    _gps_tracker_store.clear();
+    _gps_tracker_has_last_saved = _gps_tracker_store.latest(_gps_tracker_last_saved);
+    gps_tracker::writeJsonText(*_serial, "{\"type\":\"track_history_cleared\",\"ok\":true}\n");
+    return true;
+  }
+  if (strstr(json, "\"cmd\":\"send_beacon_now\"")) {
+    if (_gps_tracker_eco_sleeping) {
+      setTrackerGpsRuntimeEnabled(true);
+      _gps_tracker_eco_sleeping = false;
+      _gps_tracker_next_wake_at = 0;
+    }
+    if (runGpsTrackerCycle(true)) {
+      sendGpsTrackerStatusJson();
+    } else {
+      sendGpsTrackerErrorJson("gps_fix_unavailable");
+    }
+    return true;
+  }
+  if (strstr(json, "\"cmd\":\"set_tracker\"")) {
+    _prefs.gps_tracker_active = gps_tracker::extractBool(json, "active", _prefs.gps_tracker_active != 0) ? 1 : 0;
+    _prefs.gps_tracker_position_sharing = gps_tracker::extractBool(json, "share", _prefs.gps_tracker_position_sharing != 0) ? 1 : 0;
+    _prefs.gps_tracker_movement_mode = gps_tracker::extractBool(json, "movement_mode", _prefs.gps_tracker_movement_mode != 0) ? 1 : 0;
+    _prefs.gps_tracker_interval = gps_tracker::extractUInt(json, "interval", _prefs.gps_tracker_interval);
+    _prefs.gps_tracker_hop_limit = static_cast<uint8_t>(gps_tracker::extractUInt(json, "hop_limit", _prefs.gps_tracker_hop_limit));
+    _prefs.gps_tracker_min_movement_m = static_cast<uint16_t>(gps_tracker::extractUInt(json, "movement_m", _prefs.gps_tracker_min_movement_m));
+    _prefs.gps_tracker_fix_timeout_s = static_cast<uint16_t>(gps_tracker::extractUInt(json, "fix_timeout_s", _prefs.gps_tracker_fix_timeout_s));
+    _prefs.gps_tracker_history_max = static_cast<uint16_t>(gps_tracker::extractUInt(json, "history_max", _prefs.gps_tracker_history_max));
+    initGpsTrackerPrefs();
+
+    if (_prefs.gps_tracker_active) {
+      _prefs.gps_enabled = 1;
+      applyGpsPrefs();
+      resetTrackerGpsEcoState(false);
+      setTrackerGpsRuntimeEnabled(true);
+      _gps_tracker_next_send_at = futureMillis(1000);
+    } else {
+      _gps_tracker_next_send_at = 0;
+      resetTrackerGpsEcoState(true);
+    }
+
+    _gps_tracker_store.begin(_prefs.gps_tracker_history_max);
+    _gps_tracker_has_last_saved = _gps_tracker_store.latest(_gps_tracker_last_saved);
+    savePrefs();
+    sendGpsTrackerStatusJson();
+    return true;
+  }
+  if (strstr(json, "\"cmd\":\"set_device_name\"")) {
+    char requested_name[sizeof(_prefs.node_name) * 2];
+    char sanitized_name[sizeof(_prefs.node_name)];
+    if (!gps_tracker::extractString(json, "name", requested_name, sizeof(requested_name)) ||
+        !sanitizeNodeName(requested_name, sanitized_name, sizeof(sanitized_name))) {
+      sendGpsTrackerErrorJson("invalid_name");
+      return true;
+    }
+
+    StrHelper::strncpy(_prefs.node_name, sanitized_name, sizeof(_prefs.node_name));
+    savePrefs();
+    _serial->updateDeviceName(BLE_NAME_PREFIX, _prefs.node_name);
+    sendGpsTrackerStatusJson();
+    return true;
+  }
+  if (strstr(json, "\"cmd\":\"set_power_save\"")) {
+    _prefs.power_saving_mode = gps_tracker::extractBool(json, "enabled", _prefs.power_saving_mode != 0) ? 1 : 0;
+    applyPowerPrefs(true);
+    sendGpsTrackerStatusJson();
+    return true;
+  }
+  if (strstr(json, "\"cmd\":\"set_display_timeout\"")) {
+    _prefs.display_timeout_s = static_cast<uint16_t>(
+      constrain(
+        static_cast<int>(gps_tracker::extractUInt(json, "seconds", _prefs.display_timeout_s)),
+        0,
+        static_cast<int>(DISPLAY_TIMEOUT_MAX_SECONDS)
+      )
+    );
+    savePrefs();
+    sendGpsTrackerStatusJson();
+    return true;
+  }
+
+  sendGpsTrackerErrorJson("unsupported_cmd");
+  return true;
+}
+
+void MyMesh::loopGpsTracker() {
+  if (!_prefs.gps_tracker_active) {
+    return;
+  }
+
+  if (!_prefs.gps_enabled) {
+    resetTrackerGpsEcoState(false);
+    _gps_tracker_next_send_at = 0;
+    return;
+  }
+
+  bool adaptive_eco = shouldUseAdaptiveGpsEco();
+  if (!adaptive_eco) {
+    if (_gps_tracker_eco_sleeping || !isTrackerGpsRuntimeEnabled()) {
+      resetTrackerGpsEcoState(true);
+    } else {
+      _gps_tracker_stationary_cycles = 0;
+      _gps_tracker_fix_retry_deadline = 0;
+      _gps_tracker_next_wake_at = 0;
+    }
+  } else if (_gps_tracker_eco_sleeping) {
+    if (_gps_tracker_next_wake_at != 0 && millisHasNowPassed(_gps_tracker_next_wake_at)) {
+      setTrackerGpsRuntimeEnabled(true);
+      _gps_tracker_eco_sleeping = false;
+      _gps_tracker_next_wake_at = 0;
+      if (_prefs.gps_tracker_fix_timeout_s > 0) {
+        _gps_tracker_fix_retry_deadline =
+            futureMillis(static_cast<int>(_prefs.gps_tracker_fix_timeout_s) * 1000);
+      }
+    } else {
+      return;
+    }
+  } else {
+    setTrackerGpsRuntimeEnabled(true);
+  }
+
+  if (isTrackerGpsRuntimeEnabled() && _gps_tracker_runtime_enabled_at == 0) {
+    _gps_tracker_runtime_enabled_at = _ms->getMillis();
+  }
+
+  if (_gps_tracker_next_send_at == 0) {
+    _gps_tracker_next_send_at = futureMillis(static_cast<int>(_prefs.gps_tracker_interval) * 1000);
+  }
+
+  gps_tracker::Record record;
+  bool has_fix = captureGpsTrackerRecord(record);
+  if (has_fix) {
+    _gps_tracker_last_fix_at = _ms->getMillis();
+  } else if (_prefs.gps_tracker_fix_timeout_s > 0 && _gps_tracker_last_fix_at > 0) {
+    unsigned long age_ms = _ms->getMillis() - _gps_tracker_last_fix_at;
+    if (age_ms > static_cast<unsigned long>(_prefs.gps_tracker_fix_timeout_s) * 1000UL && _gps_tracker_fix_retry_deadline == 0) {
+      if (adaptive_eco) {
+        enterTrackerGpsEcoSleep();
+      }
+      return;
+    }
+  }
+
+  if (millisHasNowPassed(_gps_tracker_next_send_at)) {
+    bool moving = true;
+    if (runGpsTrackerCycle(false, &moving)) {
+      _gps_tracker_fix_retry_deadline = 0;
+      if (moving) {
+        _gps_tracker_stationary_cycles = 0;
+      } else if (_gps_tracker_stationary_cycles < 255) {
+        _gps_tracker_stationary_cycles++;
+      }
+
+      _gps_tracker_next_send_at = futureMillis(static_cast<int>(_prefs.gps_tracker_interval) * 1000);
+      if (adaptive_eco && !moving && _gps_tracker_stationary_cycles >= GPS_TRACKER_ECO_STATIONARY_CYCLES) {
+        enterTrackerGpsEcoSleep();
+      }
+    } else {
+      if (_prefs.gps_tracker_fix_timeout_s > 0) {
+        if (_gps_tracker_fix_retry_deadline == 0) {
+          _gps_tracker_fix_retry_deadline =
+              futureMillis(static_cast<int>(_prefs.gps_tracker_fix_timeout_s) * 1000);
+        }
+
+        if (!_gps_tracker_fix_retry_deadline || !millisHasNowPassed(_gps_tracker_fix_retry_deadline)) {
+          setTrackerGpsRuntimeEnabled(true);
+          _gps_tracker_next_send_at = futureMillis(GPS_TRACKER_ECO_RETRY_MS);
+          return;
+        }
+      }
+
+      _gps_tracker_fix_retry_deadline = 0;
+      _gps_tracker_next_send_at = futureMillis(static_cast<int>(_prefs.gps_tracker_interval) * 1000);
+      if (adaptive_eco) {
+        enterTrackerGpsEcoSleep();
+      }
+    }
+  }
+}
+#endif
 
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
@@ -623,6 +1361,10 @@ void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *
 
 uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_timestamp, const uint8_t *data,
                                  uint8_t len, uint8_t *reply) {
+  if (len < 1) {
+    return 0;
+  }
+
   if (data[0] == REQ_TYPE_GET_TELEMETRY_DATA) {
     uint8_t permissions = 0;
     uint8_t cp = contact.flags >> 1; // LSB used as 'favourite' bit (so only use upper bits)
@@ -645,7 +1387,10 @@ uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_tim
       permissions |= cp & TELEM_PERM_ENVIRONMENT;
     }
 
-    uint8_t perm_mask = ~(data[1]);    // NEW: first reserved byte (of 4), is now inverse mask to apply to permissions
+    uint8_t perm_mask = 0xFF;
+    if (len >= 2) {
+      perm_mask = ~(data[1]);    // first reserved byte is inverse permission mask
+    }
     permissions &= perm_mask;
 
     if (permissions & TELEM_PERM_BASE) { // only respond if base permission bit is set
@@ -854,7 +1599,11 @@ void MyMesh::onSendTimeout() {}
 
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
-      _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui) {
+      _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store)
+#if FEATURE_GPS_TRACKER
+      , _gps_tracker_store(store)
+#endif
+      , _ui(ui) {
   _iter_started = false;
   _cli_rescue = false;
   offline_queue_len = 0;
@@ -865,7 +1614,17 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   dirty_contacts_expiry = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
   memset(send_scope.key, 0, sizeof(send_scope.key));
-  send_unscoped = false;
+#if FEATURE_GPS_TRACKER
+  memset(&_gps_tracker_last_saved, 0, sizeof(_gps_tracker_last_saved));
+  _gps_tracker_next_send_at = 0;
+  _gps_tracker_last_fix_at = 0;
+  _gps_tracker_runtime_enabled_at = 0;
+  _gps_tracker_next_wake_at = 0;
+  _gps_tracker_fix_retry_deadline = 0;
+  _gps_tracker_stationary_cycles = 0;
+  _gps_tracker_eco_sleeping = false;
+  _gps_tracker_has_last_saved = false;
+#endif
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
@@ -878,6 +1637,15 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.tx_power_dbm = LORA_TX_POWER;
   _prefs.gps_enabled = 0;       // GPS disabled by default
   _prefs.gps_interval = 0;      // No automatic GPS updates by default
+  _prefs.gps_tracker_active = 0;
+  _prefs.gps_tracker_movement_mode = 1;
+  _prefs.gps_tracker_position_sharing = 1;
+  _prefs.gps_tracker_hop_limit = GPS_TRACKER_HOP_LIMIT_DEFAULT;
+  _prefs.gps_tracker_min_movement_m = GPS_TRACKER_MIN_MOVEMENT_M_DEFAULT;
+  _prefs.gps_tracker_fix_timeout_s = GPS_TRACKER_FIX_TIMEOUT_DEFAULT;
+  _prefs.gps_tracker_history_max = GPS_TRACKER_HISTORY_MAX;
+  _prefs.gps_tracker_interval = GPS_TRACKER_INTERVAL_DEFAULT;
+  _prefs.power_saving_mode = 1;
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
 #if defined(USE_SX1262) || defined(USE_SX1268)
 #ifdef SX126X_RX_BOOSTED_GAIN
@@ -906,9 +1674,7 @@ void MyMesh::begin(bool has_display) {
   strcpy(_prefs.node_name, ADVERT_NAME);
 #else
   // use hex of first 4 bytes of identity public key as default node name
-  char pub_key_hex[10];
-  mesh::Utils::toHex(pub_key_hex, self_id.pub_key, 4);
-  strcpy(_prefs.node_name, pub_key_hex);
+  buildDefaultPublicIdName(_prefs.node_name, sizeof(_prefs.node_name), self_id);
 #endif
 
   // if build provides default-scope, init with that
@@ -925,6 +1691,11 @@ void MyMesh::begin(bool has_display) {
   // load persisted prefs
   _store->loadPrefs(_prefs, sensors.node_lat, sensors.node_lon);
 
+  if (isTechnicalDefaultNodeName(_prefs.node_name, self_id)) {
+    StrHelper::strncpy(_prefs.node_name, DEFAULT_CLIENT_NAME, sizeof(_prefs.node_name));
+    savePrefs();
+  }
+
   // sanitise bad pref values
   _prefs.rx_delay_base = constrain(_prefs.rx_delay_base, 0, 20.0f);
   _prefs.airtime_factor = constrain(_prefs.airtime_factor, 0, 9.0f);
@@ -935,19 +1706,17 @@ void MyMesh::begin(bool has_display) {
   _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+  _prefs.power_saving_mode = constrain(_prefs.power_saving_mode, 0, 1);
+  _prefs.display_timeout_s = constrain((int)_prefs.display_timeout_s, 0, (int)DISPLAY_TIMEOUT_MAX_SECONDS);
+#if FEATURE_GPS_TRACKER
+  initGpsTrackerPrefs();
+  _gps_tracker_store.begin(_prefs.gps_tracker_history_max);
+  _gps_tracker_has_last_saved = _gps_tracker_store.latest(_gps_tracker_last_saved);
+#endif
 
 #ifdef BLE_PIN_CODE // 123456 by default
   if (_prefs.ble_pin == 0) {
-#ifdef DISPLAY_CLASS
-    if (has_display && BLE_PIN_CODE == 123456) {
-      StdRNG rng;
-      _active_ble_pin = rng.nextInt(100000, 999999); // random pin each session
-    } else {
-      _active_ble_pin = BLE_PIN_CODE; // otherwise static pin
-    }
-#else
-    _active_ble_pin = BLE_PIN_CODE; // otherwise static pin
-#endif
+    _active_ble_pin = BLE_PIN_CODE;
   } else {
     _active_ble_pin = _prefs.ble_pin;
   }
@@ -961,9 +1730,10 @@ void MyMesh::begin(bool has_display) {
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
 
-  radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
-  radio_driver.setTxPower(_prefs.tx_power_dbm);
-  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
+  radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  radio_set_tx_power(_prefs.tx_power_dbm);
+  applyPowerPrefs(false);
+  MESH_DEBUG_PRINTLN("Power save mode: %s", _prefs.power_saving_mode ? "Enabled" : "Disabled");
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
 }
@@ -983,13 +1753,9 @@ struct FreqRange {
 };
 
 static FreqRange repeat_freq_ranges[] = {
-  #ifdef ALLOWED_REPEAT_FREQ_RANGE
-  ALLOWED_REPEAT_FREQ_RANGE
-  #else
   { 433000, 433000 },
-  { 869495, 869495 },
+  { 869000, 869000 },
   { 918000, 918000 }
-  #endif
 };
 
 bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
@@ -1002,11 +1768,12 @@ bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
 
 void MyMesh::startInterface(BaseSerialInterface &serial) {
   _serial = &serial;
+  _serial->setPowerSaveMode(_prefs.power_saving_mode != 0);
   serial.enable();
 }
 
 void MyMesh::handleCmdFrame(size_t len) {
-  if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
+  if (cmd_frame[0] == CMD_DEVICE_QEURY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
 
     int i = 0;
@@ -1014,7 +1781,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     out_frame[i++] = FIRMWARE_VER_CODE;
     out_frame[i++] = MAX_CONTACTS / 2;   // v3+
     out_frame[i++] = MAX_GROUP_CHANNELS; // v3+
-    memcpy(&out_frame[i], &_prefs.ble_pin, 4);
+    memcpy(&out_frame[i], &_active_ble_pin, 4);
     i += 4;
     memset(&out_frame[i], 0, 12);
     strcpy((char *)&out_frame[i], FIRMWARE_BUILD_DATE);
@@ -1112,7 +1879,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(recipient == NULL
                         ? ERR_CODE_NOT_FOUND
-                        : ERR_CODE_UNSUPPORTED_CMD); // unknown recipient, or unsupported TXT_TYPE_*
+                        : ERR_CODE_UNSUPPORTED_CMD); // unknown recipient, or unsuported TXT_TYPE_*
     }
   } else if (cmd_frame[0] == CMD_SEND_CHANNEL_TXT_MSG) { // send GroupChannel text msg
     int i = 1;
@@ -1197,11 +1964,19 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_SET_ADVERT_NAME && len >= 2) {
     int nlen = len - 1;
-    if (nlen > sizeof(_prefs.node_name) - 1) nlen = sizeof(_prefs.node_name) - 1; // max len
-    memcpy(_prefs.node_name, &cmd_frame[1], nlen);
-    _prefs.node_name[nlen] = 0; // null terminator
-    savePrefs();
-    writeOKFrame();
+    if (nlen > sizeof(_prefs.node_name) * 2 - 1) nlen = sizeof(_prefs.node_name) * 2 - 1;
+    char requested_name[sizeof(_prefs.node_name) * 2];
+    char sanitized_name[sizeof(_prefs.node_name)];
+    memcpy(requested_name, &cmd_frame[1], nlen);
+    requested_name[nlen] = 0;
+    if (!sanitizeNodeName(requested_name, sanitized_name, sizeof(sanitized_name))) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    } else {
+      StrHelper::strncpy(_prefs.node_name, sanitized_name, sizeof(_prefs.node_name));
+      savePrefs();
+      _serial->updateDeviceName(BLE_NAME_PREFIX, _prefs.node_name);
+      writeOKFrame();
+    }
   } else if (cmd_frame[0] == CMD_SET_ADVERT_LATLON && len >= 9) {
     int32_t lat, lon, alt = 0;
     memcpy(&lat, &cmd_frame[1], 4);
@@ -1388,7 +2163,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       _prefs.client_repeat = repeat;
       savePrefs();
 
-      radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+      radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
       MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
                          (uint32_t)cr);
 
@@ -1405,7 +2180,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       _prefs.tx_power_dbm = power;
       savePrefs();
-      radio_driver.setTxPower(_prefs.tx_power_dbm);
+      radio_set_tx_power(_prefs.tx_power_dbm);
       writeOKFrame();
     }
   } else if (cmd_frame[0] == CMD_SET_TUNING_PARAMS) {
@@ -1536,15 +2311,6 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SEND_ANON_REQ && len > 1 + PUB_KEY_SIZE) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    ContactInfo anon;
-    if (recipient == NULL) { // FIRMWARE_VER_CODE 13+,  allow non-contact requests
-      memset(&anon, 0, sizeof(anon));
-      memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
-      anon.out_path_len = 0;   // default to zero-hop direct
-      anon.type = ADV_TYPE_NONE;  // unknown
-
-      if (addContact(anon)) recipient = &anon;
-    }
     uint8_t *data = &cmd_frame[1 + PUB_KEY_SIZE];
     if (recipient) {
       uint32_t tag, est_timeout;
@@ -1561,7 +2327,7 @@ void MyMesh::handleCmdFrame(size_t len) {
         _serial->writeFrame(out_frame, 10);
       }
     } else {
-      writeErrFrame(ERR_CODE_TABLE_FULL); // contacts full
+      writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
     }
   } else if (cmd_frame[0] == CMD_SEND_STATUS_REQ && len >= 1 + PUB_KEY_SIZE) {
     uint8_t *pub_key = &cmd_frame[1];
@@ -1784,15 +2550,23 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS) {
     out_frame[0] = RESP_CODE_CUSTOM_VARS;
     char *dp = (char *)&out_frame[1];
-    for (int i = 0; i < sensors.getNumSettings() && dp - (char *)&out_frame[1] < 140; i++) {
+    size_t remaining = sizeof(out_frame) - 1;
+    for (int i = 0; i < sensors.getNumSettings() && remaining > 1; i++) {
       if (i > 0) {
+        if (remaining <= 1) {
+          break;
+        }
         *dp++ = ',';
+        remaining--;
       }
-      strcpy(dp, sensors.getSettingName(i));
-      dp = strchr(dp, 0);
+      if (!appendCStringField(dp, remaining, sensors.getSettingName(i))) {
+        break;
+      }
       *dp++ = ':';
-      strcpy(dp, sensors.getSettingValue(i));
-      dp = strchr(dp, 0);
+      remaining--;
+      if (!appendCStringField(dp, remaining, sensors.getSettingValue(i))) {
+        break;
+      }
     }
     _serial->writeFrame(out_frame, dp - (char *)out_frame);
   } else if (cmd_frame[0] == CMD_SET_CUSTOM_VAR && len >= 4) {
@@ -1908,20 +2682,17 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_SET_FLOOD_SCOPE_KEY && len >= 2 && cmd_frame[1] == 0) {
     if (len >= 2 + 16) {
-      memcpy(send_scope.key, &cmd_frame[2], sizeof(send_scope.key));  // set scope override TransportKey
+      memcpy(send_scope.key, &cmd_frame[2], sizeof(send_scope.key));  // set curr scope TransportKey
     } else {
-      memset(send_scope.key, 0, sizeof(send_scope.key));  // reset scope override
+      memset(send_scope.key, 0, sizeof(send_scope.key));  // set scope to null
     }
-    send_unscoped = false;
-    writeOKFrame();
-  } else if (cmd_frame[0] == CMD_SET_FLOOD_SCOPE_KEY && len >= 2 && cmd_frame[1] == 1) {  // ver 12+
-    send_unscoped = true;
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SET_DEFAULT_FLOOD_SCOPE && len >= 1) {
     if (len >= 1+31+16) {
-      int n = strlen((char *) &cmd_frame[1]);
-      if (n > 0 && n < 31) {
-        strcpy(_prefs.default_scope_name, (char *) &cmd_frame[1]);
+      memset(_prefs.default_scope_name, 0, sizeof(_prefs.default_scope_name));
+      memcpy(_prefs.default_scope_name, &cmd_frame[1], sizeof(_prefs.default_scope_name));
+      _prefs.default_scope_name[sizeof(_prefs.default_scope_name) - 1] = 0;
+      if (_prefs.default_scope_name[0] != 0) {
         memcpy(_prefs.default_scope_key, &cmd_frame[1+31], 16);
         savePrefs();
         writeOKFrame();
@@ -1973,31 +2744,10 @@ void MyMesh::handleCmdFrame(size_t len) {
       memcpy(&out_frame[i], &r->upper_freq, 4); i += 4;
     }
     _serial->writeFrame(out_frame, i);
-  } else if (cmd_frame[0] == CMD_SEND_RAW_PACKET && len >= 4) {
-    auto pkt = obtainNewPacket();
-    if (pkt) {
-      uint8_t priority = cmd_frame[1];
-      if (tryParsePacket(pkt, &cmd_frame[2], len - 2)) {
-        sendPacket(pkt, priority, 0);
-        writeOKFrame();
-      } else {
-        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      }
-    } else {
-      writeErrFrame(ERR_CODE_TABLE_FULL);
-    }
   } else {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
     MESH_DEBUG_PRINTLN("ERROR: unknown command: %02X", cmd_frame[0]);
   }
-}
-
-static bool save_filter(const ContactInfo& c) {
-  return c.type != ADV_TYPE_NONE;   // don't save the transient/anon entries
-}
-
-void MyMesh::saveContacts() {
-  _store->saveContacts(this, save_filter);
 }
 
 void MyMesh::enterCLIRescue() {
@@ -2181,20 +2931,18 @@ void MyMesh::checkCLIRescueCmd() {
 void MyMesh::checkSerialInterface() {
   size_t len = _serial->checkRecvFrame(cmd_frame);
   if (len > 0) {
+#if FEATURE_GPS_TRACKER
+    if (gps_tracker::isJsonCommand(cmd_frame, len)) {
+      handleGpsTrackerJsonFrame(len);
+      return;
+    }
+#endif
     handleCmdFrame(len);
   } else if (_iter_started              // check if our ContactsIterator is 'running'
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {
     ContactInfo contact;
-    bool found = false;
-    while (_iter.hasNext(this, contact)) {
-      if (contact.type != ADV_TYPE_NONE) {
-        found = true;
-        break;
-      }
-    }
-
-    if (found) {
+    if (_iter.hasNext(this, contact)) {
       if (contact.lastmod > _iter_filter_since) { // apply the 'since' filter
         writeContactRespFrame(RESP_CODE_CONTACT, contact);
         if (contact.lastmod > _most_recent_lastmod) {
@@ -2215,6 +2963,10 @@ void MyMesh::checkSerialInterface() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+
+#if FEATURE_GPS_TRACKER
+  loopGpsTracker();
+#endif
 
   if (_cli_rescue) {
     checkCLIRescueCmd();
@@ -2246,9 +2998,4 @@ bool MyMesh::advert() {
   } else {
     return false;
   }
-}
-
-// To check if there is pending work
-bool MyMesh::hasPendingWork() const {
-  return _mgr->getOutboundTotal() > 0 || dirty_contacts_expiry != 0;
 }

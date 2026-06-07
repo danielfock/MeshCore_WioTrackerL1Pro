@@ -60,7 +60,7 @@ private:
 };
 
 #else
-#error "Unknown operating system"
+#error "Unkown operating system"
 #endif
 
 #include "OLEDDisplayFonts.h"
@@ -160,7 +160,7 @@ class OLEDDisplay : public Print  {
 #elif __MBED__
 class OLEDDisplay : public Stream {
 #else
-#error "Unknown operating system"
+#error "Unkown operating system"
 #endif
 
   public:

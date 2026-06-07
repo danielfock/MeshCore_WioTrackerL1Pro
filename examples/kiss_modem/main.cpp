@@ -10,10 +10,7 @@
   #include <LittleFS.h>
 #elif defined(ESP32)
   #include <SPIFFS.h>
-#else
-  #include <InternalFileSystem.h>
 #endif
-
 #if defined(KISS_UART_RX) && defined(KISS_UART_TX)
   #include <HardwareSerial.h>
 #endif
@@ -32,7 +29,7 @@ void halt() {
 }
 
 void loadOrCreateIdentity() {
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+#if defined(NRF52_PLATFORM)
   InternalFS.begin();
   IdentityStore store(InternalFS, "");
 #elif defined(ESP32)
@@ -56,11 +53,11 @@ void loadOrCreateIdentity() {
 }
 
 void onSetRadio(float freq, float bw, uint8_t sf, uint8_t cr) {
-  radio_driver.setParams(freq, bw, sf, cr);
+  radio_set_params(freq, bw, sf, cr);
 }
 
 void onSetTxPower(uint8_t power) {
-  radio_driver.setTxPower(power);
+  radio_set_tx_power(power);
 }
 
 float onGetCurrentRssi() {
@@ -82,7 +79,7 @@ void setup() {
 
   radio_driver.begin();
 
-  rng.begin(radio_driver.getRngSeed());
+  rng.begin(radio_get_rng_seed());
   loadOrCreateIdentity();
 
   sensors.begin();
@@ -119,8 +116,6 @@ void setup() {
   modem->setGetCurrentRssiCallback(onGetCurrentRssi);
   modem->setGetStatsCallback(onGetStats);
   modem->begin();
-
-  board.onBootComplete();
 }
 
 void loop() {

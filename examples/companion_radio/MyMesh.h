@@ -5,14 +5,14 @@
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 13
+#define FIRMWARE_VER_CODE 11
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "6 Jun 2026"
+#define FIRMWARE_BUILD_DATE "19 Apr 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "v1.16.0"
+#define FIRMWARE_VERSION "v1.15.0"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -24,6 +24,7 @@
 #endif
 
 #include "DataStore.h"
+#include "GpsTracker.h"
 #include "NodePrefs.h"
 
 #include <RTClib.h>
@@ -101,6 +102,17 @@ public:
   void enterCLIRescue();
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
+  bool sendSelfAdvertFromUi(bool flood);
+  bool applyCurrentRadioPrefs();
+  void applyPowerPrefs(bool persist = false);
+  bool isTrackerGpsEcoSleeping() const;
+  uint32_t getTrackerGpsEcoWakeSeconds() const;
+  bool toggleContactFavourite(const uint8_t* pub_key);
+  bool resetContactPathByKey(const uint8_t* pub_key);
+  bool removeContactByKey(const uint8_t* pub_key);
+  int  getNumConfiguredChannels();
+  bool getConfiguredChannelByOrdinal(int ordinal, int& slot_idx, ChannelDetails& channel);
+  bool removeChannelByIdx(int idx);
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -174,11 +186,12 @@ public:
       sprintf(interval_str, "%u", _prefs.gps_interval);
       sensors.setSettingValue("gps_interval", interval_str);
     }
+#if FEATURE_GPS_TRACKER
+    resetTrackerGpsEcoState(false);
+    setTrackerGpsRuntimeEnabled(_prefs.gps_enabled != 0);
+#endif
   }
 #endif
-
-  // To check if there is pending work
-  bool hasPendingWork() const;
 
 private:
   void writeOKFrame();
@@ -199,11 +212,41 @@ private:
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
 
+#if FEATURE_GPS_TRACKER
+  void initGpsTrackerPrefs();
+  bool captureGpsTrackerRecord(gps_tracker::Record& record) const;
+  bool sendGpsTrackerAdvert(const gps_tracker::Record& record, bool moving, bool force_share);
+  bool handleGpsTrackerJsonFrame(size_t len);
+  bool runGpsTrackerCycle(bool force_share, bool* moving_out = nullptr);
+  void sendGpsTrackerStatusJson();
+  void sendGpsTrackerHistoryJson(uint16_t limit);
+  void sendGpsTrackerErrorJson(const char* code);
+  void loopGpsTracker();
+  bool shouldUseAdaptiveGpsEco() const;
+  bool isTrackerGpsRuntimeEnabled() const;
+  void setTrackerGpsRuntimeEnabled(bool enabled);
+  void resetTrackerGpsEcoState(bool restore_runtime_gps);
+  void enterTrackerGpsEcoSleep();
+  unsigned long getTrackerGpsEcoWakeLeadMillis() const;
+#endif
+
   // helpers, short-cuts
   void saveChannels() { _store->saveChannels(this); }
-  void saveContacts();
+  void saveContacts() { _store->saveContacts(this); }
 
   DataStore* _store;
+#if FEATURE_GPS_TRACKER
+  gps_tracker::Store _gps_tracker_store;
+  gps_tracker::Record _gps_tracker_last_saved;
+  unsigned long _gps_tracker_next_send_at;
+  unsigned long _gps_tracker_last_fix_at;
+  unsigned long _gps_tracker_runtime_enabled_at;
+  unsigned long _gps_tracker_next_wake_at;
+  unsigned long _gps_tracker_fix_retry_deadline;
+  uint8_t _gps_tracker_stationary_cycles;
+  bool _gps_tracker_eco_sleeping;
+  bool _gps_tracker_has_last_saved;
+#endif
   NodePrefs _prefs;
   uint32_t pending_login;
   uint32_t pending_status;
@@ -218,7 +261,6 @@ private:
   uint32_t _active_ble_pin;
   bool _iter_started;
   bool _cli_rescue;
-  bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];
   uint8_t app_target_ver;
   uint8_t *sign_data;

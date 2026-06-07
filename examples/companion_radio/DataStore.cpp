@@ -7,6 +7,20 @@
   #define MAX_BLOBRECS 20
 #endif
 
+static bool readIfAvailable(File& file, void* dest, size_t len) {
+  if (file.available() < static_cast<int>(len)) {
+    return false;
+  }
+  return file.read((uint8_t*)dest, len) == len;
+}
+
+static void writePadding(File& file, size_t len) {
+  uint8_t zero = 0;
+  for (size_t i = 0; i < len; ++i) {
+    file.write(&zero, 1);
+  }
+}
+
 DataStore::DataStore(FILESYSTEM& fs, mesh::RTCClock& clock) : _fs(&fs), _fsExtra(nullptr), _clock(&clock),
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
     identity_store(fs, "")
@@ -204,35 +218,45 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
   if (file) {
     uint8_t pad[8];
 
-    file.read((uint8_t *)&_prefs.airtime_factor, sizeof(float));                           // 0
-    file.read((uint8_t *)_prefs.node_name, sizeof(_prefs.node_name));                      // 4
-    file.read(pad, 4);                                                                     // 36
-    file.read((uint8_t *)&node_lat, sizeof(node_lat));                                     // 40
-    file.read((uint8_t *)&node_lon, sizeof(node_lon));                                     // 48
-    file.read((uint8_t *)&_prefs.freq, sizeof(_prefs.freq));                               // 56
-    file.read((uint8_t *)&_prefs.sf, sizeof(_prefs.sf));                                   // 60
-    file.read((uint8_t *)&_prefs.cr, sizeof(_prefs.cr));                                   // 61
-    file.read((uint8_t *)&_prefs.client_repeat, sizeof(_prefs.client_repeat));             // 62
-    file.read((uint8_t *)&_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)); // 63
-    file.read((uint8_t *)&_prefs.bw, sizeof(_prefs.bw));                                   // 64
-    file.read((uint8_t *)&_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm));               // 68
-    file.read((uint8_t *)&_prefs.telemetry_mode_base, sizeof(_prefs.telemetry_mode_base)); // 69
-    file.read((uint8_t *)&_prefs.telemetry_mode_loc, sizeof(_prefs.telemetry_mode_loc));   // 70
-    file.read((uint8_t *)&_prefs.telemetry_mode_env, sizeof(_prefs.telemetry_mode_env));   // 71
-    file.read((uint8_t *)&_prefs.rx_delay_base, sizeof(_prefs.rx_delay_base));             // 72
-    file.read((uint8_t *)&_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy));     // 76
-    file.read((uint8_t *)&_prefs.multi_acks, sizeof(_prefs.multi_acks));                   // 77
-    file.read((uint8_t *)&_prefs.path_hash_mode, sizeof(_prefs.path_hash_mode));           // 78
-    file.read(pad, 1);                                                                     // 79
-    file.read((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
-    file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
-    file.read((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
-    file.read((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
-    file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
-    file.read((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 88
-    file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
-    file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
-    file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
+    readIfAvailable(file, &_prefs.airtime_factor, sizeof(float));                           // 0
+    readIfAvailable(file, _prefs.node_name, sizeof(_prefs.node_name));                      // 4
+    readIfAvailable(file, pad, 4);                                                          // 36
+    readIfAvailable(file, &node_lat, sizeof(node_lat));                                     // 40
+    readIfAvailable(file, &node_lon, sizeof(node_lon));                                     // 48
+    readIfAvailable(file, &_prefs.freq, sizeof(_prefs.freq));                               // 56
+    readIfAvailable(file, &_prefs.sf, sizeof(_prefs.sf));                                   // 60
+    readIfAvailable(file, &_prefs.cr, sizeof(_prefs.cr));                                   // 61
+    readIfAvailable(file, &_prefs.client_repeat, sizeof(_prefs.client_repeat));             // 62
+    readIfAvailable(file, &_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)); // 63
+    readIfAvailable(file, &_prefs.bw, sizeof(_prefs.bw));                                   // 64
+    readIfAvailable(file, &_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm));               // 68
+    readIfAvailable(file, &_prefs.telemetry_mode_base, sizeof(_prefs.telemetry_mode_base)); // 69
+    readIfAvailable(file, &_prefs.telemetry_mode_loc, sizeof(_prefs.telemetry_mode_loc));   // 70
+    readIfAvailable(file, &_prefs.telemetry_mode_env, sizeof(_prefs.telemetry_mode_env));   // 71
+    readIfAvailable(file, &_prefs.rx_delay_base, sizeof(_prefs.rx_delay_base));             // 72
+    readIfAvailable(file, &_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy));     // 76
+    readIfAvailable(file, &_prefs.multi_acks, sizeof(_prefs.multi_acks));                   // 77
+    readIfAvailable(file, &_prefs.path_hash_mode, sizeof(_prefs.path_hash_mode));           // 78
+    readIfAvailable(file, pad, 1);                                                          // 79
+    readIfAvailable(file, &_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
+    readIfAvailable(file, &_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
+    readIfAvailable(file, &_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
+    readIfAvailable(file, &_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
+    readIfAvailable(file, &_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
+    readIfAvailable(file, &_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 88
+    readIfAvailable(file, &_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
+    readIfAvailable(file, _prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
+    readIfAvailable(file, _prefs.default_scope_key, sizeof(_prefs.default_scope_key));      // 121
+    readIfAvailable(file, &_prefs.gps_tracker_active, sizeof(_prefs.gps_tracker_active));
+    readIfAvailable(file, &_prefs.gps_tracker_movement_mode, sizeof(_prefs.gps_tracker_movement_mode));
+    readIfAvailable(file, &_prefs.gps_tracker_position_sharing, sizeof(_prefs.gps_tracker_position_sharing));
+    readIfAvailable(file, &_prefs.gps_tracker_hop_limit, sizeof(_prefs.gps_tracker_hop_limit));
+    readIfAvailable(file, &_prefs.gps_tracker_min_movement_m, sizeof(_prefs.gps_tracker_min_movement_m));
+    readIfAvailable(file, &_prefs.gps_tracker_fix_timeout_s, sizeof(_prefs.gps_tracker_fix_timeout_s));
+    readIfAvailable(file, &_prefs.gps_tracker_history_max, sizeof(_prefs.gps_tracker_history_max));
+    readIfAvailable(file, &_prefs.gps_tracker_interval, sizeof(_prefs.gps_tracker_interval));
+    readIfAvailable(file, &_prefs.power_saving_mode, sizeof(_prefs.power_saving_mode));
+    readIfAvailable(file, &_prefs.display_timeout_s, sizeof(_prefs.display_timeout_s));
 
     file.close();
   }
@@ -273,6 +297,16 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
     file.write((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
     file.write((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
+    file.write((uint8_t *)&_prefs.gps_tracker_active, sizeof(_prefs.gps_tracker_active));
+    file.write((uint8_t *)&_prefs.gps_tracker_movement_mode, sizeof(_prefs.gps_tracker_movement_mode));
+    file.write((uint8_t *)&_prefs.gps_tracker_position_sharing, sizeof(_prefs.gps_tracker_position_sharing));
+    file.write((uint8_t *)&_prefs.gps_tracker_hop_limit, sizeof(_prefs.gps_tracker_hop_limit));
+    file.write((uint8_t *)&_prefs.gps_tracker_min_movement_m, sizeof(_prefs.gps_tracker_min_movement_m));
+    file.write((uint8_t *)&_prefs.gps_tracker_fix_timeout_s, sizeof(_prefs.gps_tracker_fix_timeout_s));
+    file.write((uint8_t *)&_prefs.gps_tracker_history_max, sizeof(_prefs.gps_tracker_history_max));
+    file.write((uint8_t *)&_prefs.gps_tracker_interval, sizeof(_prefs.gps_tracker_interval));
+    file.write((uint8_t *)&_prefs.power_saving_mode, sizeof(_prefs.power_saving_mode));
+    file.write((uint8_t *)&_prefs.display_timeout_s, sizeof(_prefs.display_timeout_s));
 
     file.close();
   }
@@ -309,7 +343,7 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
     }
 }
 
-void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c)) {
+void DataStore::saveContacts(DataStoreHost* host) {
   File file = openWrite(_getContactsChannelsFS(), "/contacts3");
   if (file) {
     uint32_t idx = 0;
@@ -317,10 +351,6 @@ void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
     uint8_t unused = 0;
 
     while (host->getContactForSave(idx, c)) {
-      if (filter && !filter(c)) {
-        idx++;  // advance to next contact
-        continue;
-      }
       bool success = (file.write(c.id.pub_key, 32) == 32);
       success = success && (file.write((uint8_t *)&c.name, 32) == 32);
       success = success && (file.write(&c.type, 1) == 1);

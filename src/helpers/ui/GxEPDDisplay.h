@@ -46,8 +46,7 @@ public:
 
   bool begin();
 
-  bool isOn() override { return _isOn; }
-  bool isEink() override { return true; }
+  bool isOn() override {return _isOn;};
   void turnOn() override;
   void turnOff() override;
   void clear() override;

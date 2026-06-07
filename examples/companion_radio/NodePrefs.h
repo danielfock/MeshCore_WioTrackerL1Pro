@@ -34,4 +34,14 @@ struct NodePrefs {  // persisted to file
   uint8_t autoadd_max_hops;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
   char default_scope_name[31];
   uint8_t default_scope_key[16];
+  uint8_t gps_tracker_active;
+  uint8_t gps_tracker_movement_mode;
+  uint8_t gps_tracker_position_sharing;
+  uint8_t gps_tracker_hop_limit;
+  uint16_t gps_tracker_min_movement_m;
+  uint16_t gps_tracker_fix_timeout_s;
+  uint16_t gps_tracker_history_max;
+  uint32_t gps_tracker_interval;
+  uint8_t power_saving_mode;
+  uint16_t display_timeout_s;
 };

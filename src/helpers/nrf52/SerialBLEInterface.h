@@ -12,6 +12,7 @@ class SerialBLEInterface : public BaseSerialInterface {
   BLEUart bleuart;
   bool _isEnabled;
   bool _isDeviceConnected;
+  bool _power_save_enabled;
   uint16_t _conn_handle;
   unsigned long _last_health_check;
   unsigned long _last_retry_attempt;
@@ -21,7 +22,7 @@ class SerialBLEInterface : public BaseSerialInterface {
     uint8_t buf[MAX_FRAME_SIZE];
   };
 
-  #define FRAME_QUEUE_SIZE  12
+  #define FRAME_QUEUE_SIZE  24
   
   uint8_t send_queue_len;
   Frame send_queue[FRAME_QUEUE_SIZE];
@@ -29,11 +30,15 @@ class SerialBLEInterface : public BaseSerialInterface {
   uint8_t recv_queue_len;
   Frame recv_queue[FRAME_QUEUE_SIZE];
 
+  void enterQueueCritical() const;
+  void exitQueueCritical() const;
   void clearBuffers();
   void shiftSendQueueLeft();
   void shiftRecvQueueLeft();
   bool isValidConnection(uint16_t handle, bool requireWaitingForSecurity = false) const;
   bool isAdvertising() const;
+  void applyConnectionParams(uint16_t connection_handle);
+  void applyPowerProfile(bool restart_advertising);
   static void onConnect(uint16_t connection_handle);
   static void onDisconnect(uint16_t connection_handle, uint8_t reason);
   static void onSecured(uint16_t connection_handle);
@@ -46,6 +51,7 @@ public:
   SerialBLEInterface() {
     _isEnabled = false;
     _isDeviceConnected = false;
+    _power_save_enabled = false;
     _conn_handle = BLE_CONN_HANDLE_INVALID;
     _last_health_check = 0;
     _last_retry_attempt = 0;
@@ -67,8 +73,10 @@ public:
   bool isEnabled() const override { return _isEnabled; }
   bool isConnected() const override;
   bool isWriteBusy() const override;
+  void setPowerSaveMode(bool enabled) override;
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
+  void updateDeviceName(const char* prefix, const char* name) override;
 };
 
 #if BLE_DEBUG_LOGGING && ARDUINO

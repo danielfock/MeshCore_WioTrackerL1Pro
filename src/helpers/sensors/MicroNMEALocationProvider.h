@@ -47,6 +47,15 @@ class MicroNMEALocationProvider : public LocationProvider {
     unsigned long _last_time_sync = 0;
     static const unsigned long TIME_SYNC_INTERVAL = 1800000; // Re-sync every 30 minutes
 
+    void clearRuntimeState() {
+        nmea.clear();
+        time_valid = 0;
+        next_check = millis() + 1000;
+        while (_gps_serial->available()) {
+            _gps_serial->read();
+        }
+    }
+
 public :
     MicroNMEALocationProvider(Stream& ser, mesh::RTCClock* clock = NULL, int pin_reset = GPS_RESET, int pin_en = GPS_EN,RefCountedDigitalPin* peripher_power=NULL) :
     _gps_serial(&ser), nmea(_nmeaBuffer, sizeof(_nmeaBuffer)), _pin_reset(pin_reset), _pin_en(pin_en), _clock(clock), _peripher_power(peripher_power) {
@@ -75,23 +84,35 @@ public :
 
     void begin() override {
         claim();
+        _time_sync_needed = true;
+        clearRuntimeState();
         if (_pin_en != -1) {
             digitalWrite(_pin_en, PIN_GPS_EN_ACTIVE);
+            delay(25);
         }
-        if (_pin_reset != -1) {
-            digitalWrite(_pin_reset, !GPS_RESET_FORCE);
-        }
-    }
-
-    void reset() override {
         if (_pin_reset != -1) {
             digitalWrite(_pin_reset, GPS_RESET_FORCE);
             delay(10);
             digitalWrite(_pin_reset, !GPS_RESET_FORCE);
         }
+        delay(50);
+        clearRuntimeState();
+    }
+
+    void reset() override {
+        _time_sync_needed = true;
+        clearRuntimeState();
+        if (_pin_reset != -1) {
+            digitalWrite(_pin_reset, GPS_RESET_FORCE);
+            delay(10);
+            digitalWrite(_pin_reset, !GPS_RESET_FORCE);
+        }
+        delay(25);
+        clearRuntimeState();
     }
 
     void stop() override {
+        clearRuntimeState();
         if (_pin_en != -1) {
             digitalWrite(_pin_en, !PIN_GPS_EN_ACTIVE);
         }
@@ -111,7 +132,10 @@ public :
         }
     }
 
-    void syncTime() override { nmea.clear(); LocationProvider::syncTime(); }
+    void syncTime() override {
+        clearRuntimeState();
+        LocationProvider::syncTime();
+    }
     long getLatitude() override { return nmea.getLatitude(); }
     long getLongitude() override { return nmea.getLongitude(); }
     long getAltitude() override { 

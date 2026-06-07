@@ -21,16 +21,33 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager();
 
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true, false, false);
-  MomentaryButton joystick_left(JOYSTICK_LEFT, 1000, true, false, false);
-  MomentaryButton joystick_right(JOYSTICK_RIGHT, 1000, true, false, false);
-  MomentaryButton back_btn(PIN_BACK_BTN, 1000, true, false, true);
+  MomentaryButton user_btn(PIN_USER_BTN, 1000, true, true, false);
+  MomentaryButton joystick_up(JOYSTICK_UP, 1000, true, true, false);
+  MomentaryButton joystick_down(JOYSTICK_DOWN, 1000, true, true, false);
+  MomentaryButton joystick_left(JOYSTICK_LEFT, 1000, true, true, false);
+  MomentaryButton joystick_right(JOYSTICK_RIGHT, 1000, true, true, false);
+  MomentaryButton back_btn(PIN_BACK_BTN, 1000, true, true, false);
 #endif
 
 bool radio_init() {
   rtc_clock.begin(Wire);
 
   return radio.std_init(&SPI);
+}
+
+uint32_t radio_get_rng_seed() {
+  return radio.random(0x7FFFFFFF);
+}
+
+void radio_set_params(float freq, float bw, uint8_t sf, uint8_t cr) {
+  radio.setFrequency(freq);
+  radio.setSpreadingFactor(sf);
+  radio.setBandwidth(bw);
+  radio.setCodingRate(cr);
+}
+
+void radio_set_tx_power(int8_t dbm) {
+  radio.setOutputPower(dbm);
 }
 
 mesh::LocalIdentity radio_new_identity() {

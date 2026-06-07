@@ -6,22 +6,27 @@
 
 class EnvironmentSensorManager : public SensorManager {
 protected:
-  static const int MAX_ACTIVE_SENSORS = 16;
+  int next_available_channel = TELEM_CHANNEL_SELF + 1;
 
-  // Query function pointer + sub-channel index (for multi-channel sensors like INA3221).
-  // Sub-channel is 0 for all single-output sensors.
-  struct ActiveSensor {
-    void    (*query)(uint8_t channel, uint8_t sub_channel, CayenneLPP& telemetry);
-    uint8_t   sub_channel;
-  };
+  bool AHTX0_initialized = false;
+  bool BME280_initialized = false;
+  bool BMP280_initialized = false;
+  bool INA3221_initialized = false;
+  bool INA219_initialized = false;
+  bool INA260_initialized = false;
+  bool INA226_initialized = false;
+  bool SHTC3_initialized = false;
+  bool LPS22HB_initialized = false;
+  bool MLX90614_initialized = false;
+  bool VL53L0X_initialized = false;
+  bool SHT4X_initialized = false;
+  bool BME680_initialized = false;
+  bool BMP085_initialized = false;
+  bool RAK12035_initialized = false;
 
-  ActiveSensor _active_sensors[MAX_ACTIVE_SENSORS];
-  int          _active_sensor_count = 0;
-  uint8_t      next_available_channel = TELEM_CHANNEL_SELF + 1;
-
-  bool     gps_detected = false;
-  bool     gps_active = false;
-  uint32_t gps_update_interval_sec = 1;
+  bool gps_detected = false;
+  bool gps_active = false;
+  uint32_t gps_update_interval_sec = 1;  // Default 1 second
 
   #if ENV_INCLUDE_GPS
   LocationProvider* _location;
@@ -34,6 +39,7 @@ protected:
   #endif
   #endif
 
+
 public:
   #if ENV_INCLUDE_GPS
   EnvironmentSensorManager(LocationProvider &location): _location(&location){};
@@ -43,7 +49,7 @@ public:
   #endif
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
-  #if ENV_INCLUDE_GPS || defined(ENV_INCLUDE_BME680_BSEC)
+  #if ENV_INCLUDE_GPS
   void loop() override;
   #endif
   int getNumSettings() const override;

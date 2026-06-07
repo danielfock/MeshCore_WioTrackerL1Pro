@@ -2,6 +2,10 @@
 #include <Mesh.h>
 #include "MyMesh.h"
 
+#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
+  #include <nrf.h>
+#endif
+
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
   uint32_t n = 0;
@@ -11,6 +15,45 @@ static uint32_t _atoi(const char* sp) {
   }
   return n;
 }
+
+#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
+  #ifndef WIO_WATCHDOG_TIMEOUT_MS
+    #define WIO_WATCHDOG_TIMEOUT_MS 60000UL
+  #endif
+
+static bool g_watchdog_enabled = false;
+
+static void feed_watchdog() {
+  if (g_watchdog_enabled) {
+    NRF_WDT->RR[0] = WDT_RR_RR_Reload;
+  }
+}
+
+static void init_watchdog() {
+  if (g_watchdog_enabled) {
+    return;
+  }
+
+  if (!NRF_WDT->RUNSTATUS) {
+    uint64_t reload_ticks = ((uint64_t)WIO_WATCHDOG_TIMEOUT_MS * 32768ULL) / 1000ULL;
+    if (reload_ticks == 0) {
+      reload_ticks = 1;
+    }
+
+    NRF_WDT->CONFIG =
+      (WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos) |
+      (WDT_CONFIG_HALT_Pause << WDT_CONFIG_HALT_Pos);
+    NRF_WDT->CRV = (uint32_t)reload_ticks;
+    NRF_WDT->RREN = (WDT_RREN_RR0_Enabled << WDT_RREN_RR0_Pos);
+    NRF_WDT->TASKS_START = 1;
+    __DSB();
+    __ISB();
+  }
+
+  g_watchdog_enabled = true;
+  feed_watchdog();
+}
+#endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   #include <InternalFileSystem.h>
@@ -105,12 +148,6 @@ void halt() {
   while (1) ;
 }
 
-/* WIFI RECONNECT TRACKERS */
-#if defined(ESP32) && defined(WIFI_SSID)
-  bool wifi_needs_reconnect = false;
-  unsigned long last_wifi_reconnect_attempt = 0;
-#endif
-
 void setup() {
   Serial.begin(115200);
 
@@ -131,7 +168,7 @@ void setup() {
 
   if (!radio_init()) { halt(); }
 
-  fast_rng.begin(radio_driver.getRngSeed());
+  fast_rng.begin(radio_get_rng_seed());
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   InternalFS.begin();
@@ -201,18 +238,6 @@ void setup() {
 
 #ifdef WIFI_SSID
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
-  WiFi.setAutoReconnect(true);
-
-  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info){
-      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-          WIFI_DEBUG_PRINTLN("WiFi disconnected. Flagging for reconnect...");
-          wifi_needs_reconnect = true;
-      } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-          WIFI_DEBUG_PRINTLN("WiFi connected successfully!");
-          wifi_needs_reconnect = false;
-      }
-  });
-
   WiFi.begin(WIFI_SSID, WIFI_PWD);
   serial_interface.begin(TCP_PORT);
 #elif defined(BLE_PIN_CODE)
@@ -239,30 +264,32 @@ void setup() {
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
 #endif
 
-  board.onBootComplete();
+#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
+  init_watchdog();
+#endif
 }
 
 void loop() {
   the_mesh.loop();
+  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
+    feed_watchdog();
+  #endif
+
   sensors.loop();
+  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
+    feed_watchdog();
+  #endif
+
 #ifdef DISPLAY_CLASS
   ui_task.loop();
+  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
+    feed_watchdog();
+  #endif
 #endif
+
   rtc_clock.tick();
 
-  if (!the_mesh.hasPendingWork()) {
-#if defined(NRF52_PLATFORM)
-    board.sleep(0); // nrf ignores seconds param, sleeps whenever possible
-#endif
-  }
-
-#if defined(ESP32) && defined(WIFI_SSID)
-  // Safely attempt to reconnect every 10 seconds if flagged
-  if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
-    WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");
-    WiFi.disconnect();
-    WiFi.reconnect();
-    last_wifi_reconnect_attempt = millis();
-  }
+#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
+  feed_watchdog();
 #endif
 }
