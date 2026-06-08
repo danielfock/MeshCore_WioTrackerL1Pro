@@ -178,7 +178,7 @@ int RegionMap::getTransportKeysFor(const RegionEntry& src, TransportKey dest[], 
   } else {   // new: implicit auto hashtag region
     char tmp[sizeof(src.name)+1];
     tmp[0] = '#';
-    StrHelper::strncpy(&tmp[1], src.name, sizeof(src.name));
+    strcpy(&tmp[1], src.name);
     _store->getAutoKeyFor(src.id, tmp, dest[0]);
     num = 1;
   }
@@ -315,7 +315,7 @@ size_t RegionMap::exportTo(char *dest, size_t max_len) const {
 
 int RegionMap::exportNamesTo(char *dest, int max_len, uint8_t mask, bool invert) {
   char *dp = dest;
-  
+
   // Check wildcard region
   bool wildcard_matches = invert ? (wildcard.flags & mask) : !(wildcard.flags & mask);
   if (wildcard_matches) {
@@ -325,10 +325,10 @@ int RegionMap::exportNamesTo(char *dest, int max_len, uint8_t mask, bool invert)
 
     for (int i = 0; i < num_regions; i++) {
     auto region = &regions[i];
-    
+
     // Check if region matches the filter criteria
     bool region_matches = invert ? (region->flags & mask) : !(region->flags & mask);
-    
+
     if (region_matches) {
       int len = strlen(skip_hash(region->name));
       if ((dp - dest) + len + 2 < max_len) {   // only append if name will fit
