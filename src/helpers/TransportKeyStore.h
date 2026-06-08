@@ -17,12 +17,19 @@ class TransportKeyStore {
   uint16_t     cache_ids[MAX_TKS_ENTRIES];
   TransportKey cache_keys[MAX_TKS_ENTRIES];
   int num_cache;
+  FILESYSTEM* _fs;
+  const char* _dir;
 
   void putCache(uint16_t id, const TransportKey& key);
   void invalidateCache() { num_cache = 0; }
 
 public:
-  TransportKeyStore() { num_cache = 0; }
+  TransportKeyStore() { num_cache = 0; _fs = NULL; _dir = NULL; }
+  TransportKeyStore(FILESYSTEM& fs, const char* dir) { num_cache = 0; _fs = &fs; _dir = dir; }
+
+  void begin() {
+     if (_fs && _dir && _dir[0] == '/') { _fs->mkdir(_dir); } }
+
   void getAutoKeyFor(uint16_t id, const char* name, TransportKey& dest);
   int loadKeysFor(uint16_t id, TransportKey keys[], int max_num);
   bool saveKeysFor(uint16_t id, const TransportKey keys[], int num);

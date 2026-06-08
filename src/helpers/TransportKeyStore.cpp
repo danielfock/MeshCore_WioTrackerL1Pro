@@ -58,7 +58,24 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
   }
   if (n > 0) return n;   // cache hit!
 
-  // TODO:  retrieve from difficult-to-copy keystore
+  if (_fs && _dir) {
+    char filename[64];
+    snprintf(filename, sizeof(filename), "%s/%x.tks", _dir, id);
+    if (_fs->exists(filename)) {
+#if defined(RP2040_PLATFORM)
+      File file = _fs->open(filename, "r");
+#else
+      File file = _fs->open(filename);
+#endif
+      if (file) {
+        while (n < max_num && file.available() >= sizeof(TransportKey)) {
+          file.read((uint8_t*)&keys[n], sizeof(TransportKey));
+          n++;
+        }
+        file.close();
+      }
+    }
+  }
 
   // store in cache (if room)
   for (int i = 0; i < n; i++) {
@@ -70,7 +87,26 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
 bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int num) {
   invalidateCache();
 
-  // TODO: update hardware keystore
+  if (_fs && _dir) {
+    char filename[64];
+    snprintf(filename, sizeof(filename), "%s/%x.tks", _dir, id);
+
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+    _fs->remove(filename);
+    File file = _fs->open(filename, FILE_O_WRITE);
+#elif defined(RP2040_PLATFORM)
+    File file = _fs->open(filename, "w");
+#else
+    File file = _fs->open(filename, "w", true);
+#endif
+    if (file) {
+      for (int i = 0; i < num; i++) {
+        file.write((const uint8_t*)&keys[i], sizeof(TransportKey));
+      }
+      file.close();
+      return true;
+    }
+  }
 
   return false;  // failed
 }
@@ -78,7 +114,14 @@ bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int 
 bool TransportKeyStore::removeKeys(uint16_t id) {
   invalidateCache();
 
-  // TODO: remove from hardware keystore
+  if (_fs && _dir) {
+    char filename[64];
+    snprintf(filename, sizeof(filename), "%s/%x.tks", _dir, id);
+    if (_fs->exists(filename)) {
+      _fs->remove(filename);
+      return true;
+    }
+  }
 
   return false;  // failed
 }
@@ -86,7 +129,54 @@ bool TransportKeyStore::removeKeys(uint16_t id) {
 bool TransportKeyStore::clear() {
   invalidateCache();
 
-  // TODO: clear hardware keystore
+  if (_fs && _dir) {
+#if defined(ESP32) || defined(RP2040_PLATFORM)
+    File root = _fs->open(_dir);
+    if (root && root.isDirectory()) {
+#if defined(ESP32)
+      File file = root.openNextFile();
+#else
+      // For RP2040 LittleFS/LittleFS
+      File file = root.openNextFile();
+#endif
+      while (file) {
+        String fname = file.name();
+        file.close();
+        if (fname.endsWith(".tks")) {
+          if (fname.startsWith("/")) {
+            _fs->remove(fname);
+          } else {
+            String path = String(_dir) + "/" + fname;
+            _fs->remove(path);
+          }
+        }
+        file = root.openNextFile();
+      }
+      root.close();
+      return true;
+    }
+#elif defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+    File root = _fs->open(_dir);
+    if (root && root.isDirectory()) {
+      File file = root.openNextFile();
+      while (file) {
+        String fname = file.name();
+        file.close();
+        if (fname.endsWith(".tks")) {
+          if (fname.startsWith("/")) {
+            _fs->remove(fname.c_str());
+          } else {
+            String path = String(_dir) + "/" + fname;
+            _fs->remove(path.c_str());
+          }
+        }
+        file = root.openNextFile();
+      }
+      root.close();
+      return true;
+    }
+#endif
+  }
 
   return false;  // failed
 }
