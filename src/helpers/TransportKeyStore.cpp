@@ -30,7 +30,10 @@ void TransportKeyStore::putCache(uint16_t id, const TransportKey& key) {
     cache_keys[num_cache] = key;
     num_cache++;
   } else {
-    // TODO: evict oldest cache entry
+    memmove(&cache_ids[0], &cache_ids[1], (MAX_TKS_ENTRIES - 1) * sizeof(cache_ids[0]));
+    memmove(&cache_keys[0], &cache_keys[1], (MAX_TKS_ENTRIES - 1) * sizeof(cache_keys[0]));
+    cache_ids[MAX_TKS_ENTRIES - 1] = id;
+    cache_keys[MAX_TKS_ENTRIES - 1] = key;
   }
 }
 
