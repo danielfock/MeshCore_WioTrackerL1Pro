@@ -33,8 +33,11 @@ void TransportKeyStore::putCache(uint16_t id, const TransportKey& key) {
     cache_keys[num_cache] = key;
     num_cache++;
   } else {
-    memmove(&cache_ids[0], &cache_ids[1], (MAX_TKS_ENTRIES - 1) * sizeof(cache_ids[0]));
-    memmove(&cache_keys[0], &cache_keys[1], (MAX_TKS_ENTRIES - 1) * sizeof(cache_keys[0]));
+    memmove(&cache_ids[0], &cache_ids[1],
+            (MAX_TKS_ENTRIES - 1) * sizeof(cache_ids[0]));
+    memmove(&cache_keys[0], &cache_keys[1],
+            (MAX_TKS_ENTRIES - 1) * sizeof(cache_keys[0]));
+
     cache_ids[MAX_TKS_ENTRIES - 1] = id;
     cache_keys[MAX_TKS_ENTRIES - 1] = key;
   }
@@ -42,7 +45,7 @@ void TransportKeyStore::putCache(uint16_t id, const TransportKey& key) {
 
 void TransportKeyStore::getAutoKeyFor(uint16_t id, const char* name, TransportKey& dest) {
   for (int i = 0; i < num_cache; i++) {  // first, check cache
-    if (cache_ids[i] == id) {   // cache hit!
+    if (cache_ids[i] == id) {            // cache hit!
       dest = cache_keys[i];
       return;
     }
@@ -65,7 +68,7 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
     }
   }
 
-  if (n > 0) return n;   // cache hit!
+  if (n > 0) return n;  // cache hit!
 
   if (_backend) {
     n = _backend->loadKeysFor(id, keys, max_num);
