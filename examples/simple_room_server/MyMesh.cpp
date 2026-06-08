@@ -363,7 +363,6 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
 
     uint32_t now = getRTCClock()->getCurrentTimeUnique();
     memcpy(reply_data, &now, 4); // response packets always prefixed with timestamp
-    // TODO: maybe reply with count of messages waiting to be synced for THIS client?
     reply_data[4] = RESP_SERVER_LOGIN_OK;
     reply_data[5] = 0; // Legacy: was recommended keep-alive interval (secs / 16)
     reply_data[6] = (client->isAdmin() ? 1 : (client->permissions == 0 ? 2 : 0));
@@ -371,16 +370,17 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
     reply_data[7] = client->permissions; // NEW
     getRNG()->random(&reply_data[8], 4);   // random blob to help packet-hash uniqueness
     reply_data[12] = FIRMWARE_VER_LEVEL;  // New field
+    reply_data[13] = getUnsyncedCount(client); // count of messages waiting to be synced
 
     next_push = futureMillis(PUSH_NOTIFY_DELAY_MILLIS); // delay next push, give RESPONSE packet time to arrive first
 
     if (packet->isRouteFlood()) {
       // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
       mesh::Packet *path = createPathReturn(sender, client->shared_secret, packet->path, packet->path_len,
-                                            PAYLOAD_TYPE_RESPONSE, reply_data, 13);
+                                            PAYLOAD_TYPE_RESPONSE, reply_data, 14);
       if (path) sendFloodReply(path, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
     } else {
-      mesh::Packet *reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, client->shared_secret, reply_data, 13);
+      mesh::Packet *reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, client->shared_secret, reply_data, 14);
       if (reply) {
         if (client->out_path_len != OUT_PATH_UNKNOWN) { // we have an out_path, so send DIRECT
           sendDirect(reply, client->out_path, client->out_path_len, SERVER_RESPONSE_DELAY);
