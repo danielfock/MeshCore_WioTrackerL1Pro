@@ -138,17 +138,24 @@ void ST7789LCDDisplay::drawRect(int x, int y, int w, int h) {
 }
 
 void ST7789LCDDisplay::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
-  uint8_t byteWidth = (w + 7) / 8;
+  int byteWidth = (w + 7) / 8;
+
+  int scaled_x = x * DISPLAY_SCALE_X;
+  int scaled_y = y * DISPLAY_SCALE_Y;
 
   for (int j = 0; j < h; j++) {
+    int base_y = scaled_y + j * DISPLAY_SCALE_X;
+    int row_offset = j * byteWidth;
     for (int i = 0; i < w; i++) {
-      uint8_t byte = bits[j * byteWidth + i / 8];
+      uint8_t byte = bits[row_offset + (i >> 3)];
       bool pixelOn = byte & (0x80 >> (i & 7));
 
       if (pixelOn) {
+        int base_x = scaled_x + i * DISPLAY_SCALE_X;
         for (int dy = 0; dy < DISPLAY_SCALE_X; dy++) {
+          int pixel_y = base_y + dy;
           for (int dx = 0; dx < DISPLAY_SCALE_X; dx++) {
-            display.drawPixel(x * DISPLAY_SCALE_X + i * DISPLAY_SCALE_X + dx, y * DISPLAY_SCALE_Y + j * DISPLAY_SCALE_X + dy, _color);
+            display.drawPixel(base_x + dx, pixel_y, _color);
           }
         }
       }
