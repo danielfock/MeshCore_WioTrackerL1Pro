@@ -16,43 +16,8 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
-#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-  #ifndef WIO_WATCHDOG_TIMEOUT_MS
-    #define WIO_WATCHDOG_TIMEOUT_MS 60000UL
-  #endif
 
-static bool g_watchdog_enabled = false;
 
-static void feed_watchdog() {
-  if (g_watchdog_enabled) {
-    NRF_WDT->RR[0] = WDT_RR_RR_Reload;
-  }
-}
-
-static void init_watchdog() {
-  if (g_watchdog_enabled) {
-    return;
-  }
-
-  if (!NRF_WDT->RUNSTATUS) {
-    uint64_t reload_ticks = ((uint64_t)WIO_WATCHDOG_TIMEOUT_MS * 32768ULL) / 1000ULL;
-    if (reload_ticks == 0) {
-      reload_ticks = 1;
-    }
-
-    NRF_WDT->CONFIG =
-      (WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos) |
-      (WDT_CONFIG_HALT_Pause << WDT_CONFIG_HALT_Pos);
-    NRF_WDT->CRV = (uint32_t)reload_ticks;
-    NRF_WDT->RREN = (WDT_RREN_RR0_Enabled << WDT_RREN_RR0_Pos);
-    NRF_WDT->TASKS_START = 1;
-    __DSB();
-    __ISB();
-  }
-
-  g_watchdog_enabled = true;
-  feed_watchdog();
-}
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -264,32 +229,32 @@ void setup() {
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
 #endif
 
-#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-  init_watchdog();
+#if defined(NRF52_PLATFORM)
+  board.enableWatchdog();
 #endif
 }
 
 void loop() {
   the_mesh.loop();
-  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-    feed_watchdog();
+  #if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
   #endif
 
   sensors.loop();
-  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-    feed_watchdog();
+  #if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
   #endif
 
 #ifdef DISPLAY_CLASS
   ui_task.loop();
-  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-    feed_watchdog();
+  #if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
   #endif
 #endif
 
   rtc_clock.tick();
 
-#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-  feed_watchdog();
-#endif
+#if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
+  #endif
 }

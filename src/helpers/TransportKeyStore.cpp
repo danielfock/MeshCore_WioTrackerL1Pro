@@ -1,9 +1,6 @@
 #include "TransportKeyStore.h"
 #include <SHA256.h>
-
-#if defined(ESP32)
-#include <Preferences.h>
-#endif
+#include <string.h>
 
 uint16_t TransportKey::calcTransportCode(const mesh::Packet* packet) const {
   uint16_t code;
@@ -13,11 +10,13 @@ uint16_t TransportKey::calcTransportCode(const mesh::Packet* packet) const {
   sha.update(&type, 1);
   sha.update(packet->payload, packet->payload_len);
   sha.finalizeHMAC(key, sizeof(key), &code, 2);
+
   if (code == 0) {     // reserve codes 0000 and FFFF
     code++;
   } else if (code == 0xFFFF) {
     code--;
   }
+
   return code;
 }
 
@@ -34,17 +33,24 @@ void TransportKeyStore::putCache(uint16_t id, const TransportKey& key) {
     cache_keys[num_cache] = key;
     num_cache++;
   } else {
-    // TODO: evict oldest cache entry
+    memmove(&cache_ids[0], &cache_ids[1],
+            (MAX_TKS_ENTRIES - 1) * sizeof(cache_ids[0]));
+    memmove(&cache_keys[0], &cache_keys[1],
+            (MAX_TKS_ENTRIES - 1) * sizeof(cache_keys[0]));
+
+    cache_ids[MAX_TKS_ENTRIES - 1] = id;
+    cache_keys[MAX_TKS_ENTRIES - 1] = key;
   }
 }
 
 void TransportKeyStore::getAutoKeyFor(uint16_t id, const char* name, TransportKey& dest) {
   for (int i = 0; i < num_cache; i++) {  // first, check cache
-    if (cache_ids[i] == id) {   // cache hit!
+    if (cache_ids[i] == id) {            // cache hit!
       dest = cache_keys[i];
       return;
     }
   }
+
   // calc key for publicly-known hashtag region name
   SHA256 sha;
   sha.update(name, strlen(name));
@@ -55,26 +61,33 @@ void TransportKeyStore::getAutoKeyFor(uint16_t id, const char* name, TransportKe
 
 int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num) {
   int n = 0;
+
   for (int i = 0; i < num_cache && n < max_num; i++) {  // first, check cache
     if (cache_ids[i] == id) {
       keys[n++] = cache_keys[i];
     }
   }
-  if (n > 0) return n;   // cache hit!
 
-  // TODO:  retrieve from difficult-to-copy keystore
+  if (n > 0) return n;  // cache hit!
 
-  // store in cache (if room)
+  if (_backend) {
+    n = _backend->loadKeysFor(id, keys, max_num);
+  }
+
+  // store in cache
   for (int i = 0; i < n; i++) {
     putCache(id, keys[i]);
   }
+
   return n;
 }
 
 bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int num) {
   invalidateCache();
 
-  // TODO: update hardware keystore
+  if (_backend) {
+    return _backend->saveKeysFor(id, keys, num);
+  }
 
   return false;  // failed
 }
@@ -82,27 +95,19 @@ bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int 
 bool TransportKeyStore::removeKeys(uint16_t id) {
   invalidateCache();
 
-#if defined(ESP32)
-  Preferences prefs;
-  if (!prefs.begin("keystore", false)) {
-    return false;
+  if (_backend) {
+    return _backend->removeKeys(id);
   }
-  char key_name[16];
-  snprintf(key_name, sizeof(key_name), "%u", id);
-  bool success = prefs.remove(key_name);
-  prefs.end();
-  return success;
-#else
-  // TODO: remove from hardware keystore
 
   return false;  // failed
-#endif
 }
 
 bool TransportKeyStore::clear() {
   invalidateCache();
 
-  // TODO: clear hardware keystore
+  if (_backend) {
+    return _backend->clear();
+  }
 
   return false;  // failed
 }
