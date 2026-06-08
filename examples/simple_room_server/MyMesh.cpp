@@ -39,9 +39,14 @@ struct ServerStats {
 };
 
 void MyMesh::addPost(ClientInfo *client, const char *postData) {
-  // TODO: suggested postData format: <title>/<descrption>
   posts[next_post_idx].author = client->id; // add to cyclic queue
-  StrHelper::strncpy(posts[next_post_idx].text, postData, MAX_POST_TEXT_LEN);
+  if (strchr(postData, '/') != nullptr) {
+    StrHelper::strncpy(posts[next_post_idx].text, postData, MAX_POST_TEXT_LEN);
+  } else {
+    StrHelper::strncpy(posts[next_post_idx].text, "Untitled/", MAX_POST_TEXT_LEN);
+    int offset = strlen(posts[next_post_idx].text);
+    StrHelper::strncpy(posts[next_post_idx].text + offset, postData, MAX_POST_TEXT_LEN - offset);
+  }
 
   posts[next_post_idx].post_timestamp = getRTCClock()->getCurrentTimeUnique();
   next_post_idx = (next_post_idx + 1) % MAX_UNSYNCED_POSTS;
