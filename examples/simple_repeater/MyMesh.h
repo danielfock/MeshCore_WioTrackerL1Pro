@@ -33,7 +33,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
-#include "RateLimiter.h"
+#include <helpers/RateLimiter.h>
 
 #ifdef WITH_BRIDGE
 extern AbstractBridge* bridge;
