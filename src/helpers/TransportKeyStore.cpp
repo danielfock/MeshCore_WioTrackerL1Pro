@@ -1,6 +1,10 @@
 #include "TransportKeyStore.h"
 #include <SHA256.h>
 
+#if defined(ESP32)
+#include <Preferences.h>
+#endif
+
 uint16_t TransportKey::calcTransportCode(const mesh::Packet* packet) const {
   uint16_t code;
   SHA256 sha;
@@ -78,9 +82,21 @@ bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int 
 bool TransportKeyStore::removeKeys(uint16_t id) {
   invalidateCache();
 
+#if defined(ESP32)
+  Preferences prefs;
+  if (!prefs.begin("keystore", false)) {
+    return false;
+  }
+  char key_name[16];
+  snprintf(key_name, sizeof(key_name), "%u", id);
+  bool success = prefs.remove(key_name);
+  prefs.end();
+  return success;
+#else
   // TODO: remove from hardware keystore
 
   return false;  // failed
+#endif
 }
 
 bool TransportKeyStore::clear() {
