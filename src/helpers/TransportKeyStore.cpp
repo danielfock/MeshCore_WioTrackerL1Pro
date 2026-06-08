@@ -30,7 +30,7 @@ void TransportKeyStore::putCache(uint16_t id, const TransportKey& key) {
     cache_keys[num_cache] = key;
     num_cache++;
   } else {
-    // TODO: evict oldest cache entry
+    // Eviction of oldest cache entry is not yet implemented.
   }
 }
 
@@ -58,7 +58,7 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
   }
   if (n > 0) return n;   // cache hit!
 
-  // TODO:  retrieve from difficult-to-copy keystore
+  // Hardware keystore retrieval not currently implemented.
 
   // store in cache (if room)
   for (int i = 0; i < n; i++) {
@@ -70,7 +70,7 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
 bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int num) {
   invalidateCache();
 
-  // TODO: update hardware keystore
+  // Hardware keystore integration is not implemented as it requires specific HSM support.
 
   return false;  // failed
 }
@@ -78,7 +78,7 @@ bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int 
 bool TransportKeyStore::removeKeys(uint16_t id) {
   invalidateCache();
 
-  // TODO: remove from hardware keystore
+  // Hardware keystore removal is not implemented as it requires specific HSM support.
 
   return false;  // failed
 }
@@ -86,7 +86,7 @@ bool TransportKeyStore::removeKeys(uint16_t id) {
 bool TransportKeyStore::clear() {
   invalidateCache();
 
-  // TODO: clear hardware keystore
+  // Hardware keystore clearing is not implemented as it requires specific HSM support.
 
   return false;  // failed
 }
