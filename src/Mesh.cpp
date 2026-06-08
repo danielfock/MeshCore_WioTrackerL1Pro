@@ -158,10 +158,16 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
                 uint8_t hash_size = (path_len >> 6) + 1;
                 uint8_t hash_count = path_len & 63;
                 uint8_t* path = &data[k]; k += hash_size*hash_count;
-                uint8_t extra_type = data[k++] & 0x0F;   // upper 4 bits reserved for future use
+                uint8_t extra_type = data[k++];
+                uint32_t path_timestamp = 0;
+                if ((extra_type & 0x80) != 0 && len - k >= 4) {
+                  memcpy(&path_timestamp, &data[k], 4);
+                  k += 4;
+                }
+                extra_type &= 0x0F;   // upper 4 bits reserved for future use
                 uint8_t* extra = &data[k];
                 uint8_t extra_len = len - k;   // remainder of packet (may be padded with zeroes!)
-                if (onPeerPathRecv(pkt, j, secret, path, path_len, extra_type, extra, extra_len)) {
+                if (onPeerPathRecv(pkt, j, secret, path, path_len, extra_type, extra, extra_len, path_timestamp)) {
                   if (pkt->isRouteFlood()) {
                     // send a reciprocal return path to sender, but send DIRECTLY!
                     mesh::Packet* rpath = createPathReturn(&src_hash, secret, pkt->path, pkt->path_len, 0, NULL, 0);
@@ -456,13 +462,16 @@ Packet* Mesh::createPathReturn(const uint8_t* dest_hash, const uint8_t* secret, 
 
     data[data_len++] = path_len;
     memcpy(&data[data_len], path, path_hash_count*path_hash_size); data_len += path_hash_count*path_hash_size;
+
+    uint32_t now = getRTCClock()->getCurrentTime();
     if (extra_len > 0) {
-      data[data_len++] = extra_type;
+      data[data_len++] = extra_type | 0x80;
+      memcpy(&data[data_len], &now, 4); data_len += 4;
       memcpy(&data[data_len], extra, extra_len); data_len += extra_len;
     } else {
       // append a timestamp, or random blob (to make packet_hash unique)
-      data[data_len++] = 0xFF;  // dummy payload type
-      getRNG()->random(&data[data_len], 4); data_len += 4;
+      data[data_len++] = 0xFF;  // dummy payload type | 0x80 = 0xFF
+      memcpy(&data[data_len], &now, 4); data_len += 4;
     }
 
     len += Utils::encryptThenMAC(secret, &packet->payload[len], data, data_len);

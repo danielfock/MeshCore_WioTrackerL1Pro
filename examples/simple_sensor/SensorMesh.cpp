@@ -655,7 +655,7 @@ void SensorMesh::onControlDataRecv(mesh::Packet* packet) {
   }
 }
 
-bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) {
+bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len, uint32_t path_timestamp) {
   int i = matching_peer_indexes[sender_idx];
   if (i < 0 || i >= acl.getNumClients()) {
     MESH_DEBUG_PRINTLN("onPeerPathRecv: Invalid sender idx: %d", i);
@@ -663,6 +663,13 @@ bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint
   }
 
   ClientInfo* from = acl.getClientByIdx(i);
+
+  if (path_timestamp > 0 && path_timestamp < from->last_timestamp) {
+    MESH_DEBUG_PRINTLN("onPeerPathRecv: possible replay attack detected");
+    return false;
+  } else if (path_timestamp > 0) {
+    from->last_timestamp = path_timestamp;
+  }
 
   MESH_DEBUG_PRINTLN("PATH to contact, path_len=%d", (uint32_t) path_len);
   // NOTE: for this impl, we just replace the current 'out_path' regardless, whenever sender sends us a new out_path.
