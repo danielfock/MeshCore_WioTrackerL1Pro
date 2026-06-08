@@ -748,12 +748,23 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
 
 bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t *secret, uint8_t *path,
                             uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len) {
-  // TODO: prevent replay attacks
   int i = matching_peer_indexes[sender_idx];
 
   if (i >= 0 && i < acl.getNumClients()) { // get from our known_clients table (sender SHOULD already be known in this context)
-    MESH_DEBUG_PRINTLN("PATH to client, path_len=%d", (uint32_t)path_len);
     auto client = acl.getClientByIdx(i);
+
+    if (extra_type == 0xFF && extra_len == 4) {
+      uint32_t timestamp;
+      memcpy(&timestamp, extra, 4);
+
+      if (timestamp <= client->last_timestamp) {
+        MESH_DEBUG_PRINTLN("onPeerPathRecv: possible replay attack detected");
+        return false;
+      }
+      client->last_timestamp = timestamp;
+    }
+
+    MESH_DEBUG_PRINTLN("PATH to client, path_len=%d", (uint32_t)path_len);
 
     // store a copy of path, for sendDirect()
     client->out_path_len = mesh::Packet::copyPath(client->out_path, path, path_len);

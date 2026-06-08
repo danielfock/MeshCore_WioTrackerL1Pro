@@ -462,7 +462,8 @@ Packet* Mesh::createPathReturn(const uint8_t* dest_hash, const uint8_t* secret, 
     } else {
       // append a timestamp, or random blob (to make packet_hash unique)
       data[data_len++] = 0xFF;  // dummy payload type
-      getRNG()->random(&data[data_len], 4); data_len += 4;
+      uint32_t now = getRTCClock()->getCurrentTime();
+      memcpy(&data[data_len], &now, 4); data_len += 4;
     }
 
     len += Utils::encryptThenMAC(secret, &packet->payload[len], data, data_len);
