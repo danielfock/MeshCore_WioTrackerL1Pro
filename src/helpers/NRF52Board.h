@@ -32,6 +32,7 @@ class NRF52Board : public mesh::MainBoard {
 protected:
   uint8_t startup_reason;
   char *ota_name;
+  bool watchdog_enabled = false;
 
 #ifdef NRF52_POWER_MANAGEMENT
   uint32_t reset_reason;              // RESETREAS register value
@@ -53,6 +54,9 @@ public:
   virtual bool getBootloaderVersion(char* version, size_t max_len) override;
   virtual bool startOTAUpdate(const char *id, char reply[]) override;
   virtual void sleep(uint32_t secs) override;
+
+  void enableWatchdog(uint32_t timeout_ms = 60000UL);
+  void feedWatchdog();
 
 #ifdef NRF52_POWER_MANAGEMENT
   bool isExternalPowered() override;
