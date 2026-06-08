@@ -58,7 +58,9 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
   }
   if (n > 0) return n;   // cache hit!
 
-  // TODO:  retrieve from difficult-to-copy keystore
+  if (_backend) {
+    n = _backend->loadKeysFor(id, keys, max_num);
+  }
 
   // store in cache (if room)
   for (int i = 0; i < n; i++) {
@@ -70,7 +72,9 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
 bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int num) {
   invalidateCache();
 
-  // TODO: update hardware keystore
+  if (_backend) {
+    return _backend->saveKeysFor(id, keys, num);
+  }
 
   return false;  // failed
 }
@@ -78,7 +82,9 @@ bool TransportKeyStore::saveKeysFor(uint16_t id, const TransportKey keys[], int 
 bool TransportKeyStore::removeKeys(uint16_t id) {
   invalidateCache();
 
-  // TODO: remove from hardware keystore
+  if (_backend) {
+    return _backend->removeKeys(id);
+  }
 
   return false;  // failed
 }
@@ -86,7 +92,9 @@ bool TransportKeyStore::removeKeys(uint16_t id) {
 bool TransportKeyStore::clear() {
   invalidateCache();
 
-  // TODO: clear hardware keystore
+  if (_backend) {
+    return _backend->clear();
+  }
 
   return false;  // failed
 }
