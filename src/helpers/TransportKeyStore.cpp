@@ -30,7 +30,12 @@ void TransportKeyStore::putCache(uint16_t id, const TransportKey& key) {
     cache_keys[num_cache] = key;
     num_cache++;
   } else {
-    // TODO: evict oldest cache entry
+    for (int i = 1; i < MAX_TKS_ENTRIES; i++) {
+      cache_ids[i - 1] = cache_ids[i];
+      cache_keys[i - 1] = cache_keys[i];
+    }
+    cache_ids[MAX_TKS_ENTRIES - 1] = id;
+    cache_keys[MAX_TKS_ENTRIES - 1] = key;
   }
 }
 
