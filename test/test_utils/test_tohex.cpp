@@ -51,6 +51,34 @@ TEST(UtilsToHex, NullTerminatesOnEmptyInput) {
     EXPECT_EQ('\0', output[0]);
 }
 
+TEST(UtilsIsHexChar, ValidHexChars) {
+    // Test numbers
+    for (char c = '0'; c <= '9'; ++c) {
+        EXPECT_TRUE(Utils::isHexChar(c));
+    }
+    // Test uppercase letters
+    for (char c = 'A'; c <= 'F'; ++c) {
+        EXPECT_TRUE(Utils::isHexChar(c));
+    }
+    // Test lowercase letters
+    for (char c = 'a'; c <= 'f'; ++c) {
+        EXPECT_TRUE(Utils::isHexChar(c));
+    }
+}
+
+TEST(UtilsIsHexChar, InvalidHexChars) {
+    EXPECT_FALSE(Utils::isHexChar('G'));
+    EXPECT_FALSE(Utils::isHexChar('g'));
+    EXPECT_FALSE(Utils::isHexChar('Z'));
+    EXPECT_FALSE(Utils::isHexChar('z'));
+    EXPECT_FALSE(Utils::isHexChar('/'));
+    EXPECT_FALSE(Utils::isHexChar(':'));
+    EXPECT_FALSE(Utils::isHexChar('@'));
+    EXPECT_FALSE(Utils::isHexChar('`'));
+    EXPECT_FALSE(Utils::isHexChar('\0'));
+    EXPECT_FALSE(Utils::isHexChar(' '));
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
