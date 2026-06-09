@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Dispatcher.h>
+#include <helpers/TransportKeyStore.h>
 
 namespace mesh {
 
@@ -8,6 +9,7 @@ class GroupChannel {
 public:
   uint8_t hash[PATH_HASH_SIZE];
   uint8_t secret[PUB_KEY_SIZE];
+  TransportKey send_scope;
 };
 
 /**

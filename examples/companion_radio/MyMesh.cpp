@@ -733,11 +733,14 @@ void MyMesh::sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, ui
   sendFloodScoped(*scope, pkt, delay_millis);
 }
 void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis) {
-  // TODO: have per-channel send_scope
   TransportKey default_scope;
-  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
-
-  auto scope = send_scope.isNull() ? &default_scope : &send_scope;
+  const TransportKey* scope;
+  if (!channel.send_scope.isNull()) {
+    scope = &channel.send_scope;
+  } else {
+    memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+    scope = send_scope.isNull() ? &default_scope : &send_scope;
+  }
   sendFloodScoped(*scope, pkt, delay_millis);
 }
 
@@ -2451,6 +2454,8 @@ void MyMesh::handleCmdFrame(size_t len) {
       i += 32;
       memcpy(&out_frame[i], channel.channel.secret, 16);
       i += 16; // NOTE: only 128-bit supported
+      memcpy(&out_frame[i], channel.channel.send_scope.key, 16);
+      i += 16;
       _serial->writeFrame(out_frame, i);
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND);
@@ -2463,6 +2468,11 @@ void MyMesh::handleCmdFrame(size_t len) {
     StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
     memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
     memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
+    if (len >= 2 + 32 + 16 + 16) {
+      memcpy(channel.channel.send_scope.key, &cmd_frame[2 + 32 + 16], 16);
+    } else {
+      memset(channel.channel.send_scope.key, 0, 16);
+    }
     if (setChannel(channel_idx, channel)) {
       saveChannels();
       writeOKFrame();
