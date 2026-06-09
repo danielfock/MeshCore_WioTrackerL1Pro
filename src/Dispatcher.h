@@ -127,8 +127,13 @@ class Dispatcher {
   unsigned long last_budget_update;
   unsigned long duty_cycle_window_ms;
 
+  unsigned long airtime_buckets[12];
+  unsigned long last_bucket_time;
+  int current_bucket_idx;
+
   void processRecvPacket(Packet* pkt);
   void updateTxBudget();
+  void updateUtilisationWindow();
 
 protected:
   PacketManager* _mgr;
@@ -180,6 +185,7 @@ public:
   unsigned long getTotalAirTime() const { return total_air_time; }
   unsigned long getReceiveAirTime() const {return rx_air_time; }
   unsigned long getRemainingTxBudget() const { return tx_budget_ms; }
+  uint8_t getChannelUtilisationPercent();
   uint32_t getNumSentFlood() const { return n_sent_flood; }
   uint32_t getNumSentDirect() const { return n_sent_direct; }
   uint32_t getNumRecvFlood() const { return n_recv_flood; }

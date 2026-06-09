@@ -363,4 +363,36 @@ bool NRF52Board::startOTAUpdate(const char *id, char reply[]) {
 
   return true;
 }
+
+void NRF52Board::enableWatchdog(uint32_t timeout_ms) {
+  if (watchdog_enabled) {
+    return;
+  }
+
+  if (!NRF_WDT->RUNSTATUS) {
+    uint64_t reload_ticks = ((uint64_t)timeout_ms * 32768ULL) / 1000ULL;
+    if (reload_ticks == 0) {
+      reload_ticks = 1;
+    }
+
+    NRF_WDT->CONFIG =
+      (WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos) |
+      (WDT_CONFIG_HALT_Pause << WDT_CONFIG_HALT_Pos);
+    NRF_WDT->CRV = (uint32_t)reload_ticks;
+    NRF_WDT->RREN = (WDT_RREN_RR0_Enabled << WDT_RREN_RR0_Pos);
+    NRF_WDT->TASKS_START = 1;
+    __DSB();
+    __ISB();
+  }
+
+  watchdog_enabled = true;
+  feedWatchdog();
+}
+
+void NRF52Board::feedWatchdog() {
+  if (watchdog_enabled) {
+    NRF_WDT->RR[0] = WDT_RR_RR_Reload;
+  }
+}
+
 #endif

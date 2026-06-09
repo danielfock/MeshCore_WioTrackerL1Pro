@@ -205,8 +205,8 @@ uint8_t MyMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender
     if (_prefs.disable_fwd) {   // is this repeater currently disabled
       reply_data[8] |= 0x80;  // is disabled
     }
-    // TODO:  add some kind of moving-window utilisation metric, so can query 'how busy' is this repeater
-    return 9;   // reply length
+    reply_data[9] = getChannelUtilisationPercent();
+    return 10;   // reply length
   }
   return 0;
 }
@@ -747,13 +747,20 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
 }
 
 bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t *secret, uint8_t *path,
-                            uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len) {
-  // TODO: prevent replay attacks
+                            uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len, uint32_t path_timestamp) {
   int i = matching_peer_indexes[sender_idx];
 
   if (i >= 0 && i < acl.getNumClients()) { // get from our known_clients table (sender SHOULD already be known in this context)
-    MESH_DEBUG_PRINTLN("PATH to client, path_len=%d", (uint32_t)path_len);
     auto client = acl.getClientByIdx(i);
+
+    if (path_timestamp > 0 && path_timestamp < client->last_timestamp) {
+      MESH_DEBUG_PRINTLN("onPeerPathRecv: possible replay attack detected");
+      return false;
+    } else if (path_timestamp > 0) {
+      client->last_timestamp = path_timestamp;
+    }
+
+    MESH_DEBUG_PRINTLN("PATH to client, path_len=%d", (uint32_t)path_len);
 
     // store a copy of path, for sendDirect()
     client->out_path_len = mesh::Packet::copyPath(client->out_path, path, path_len);

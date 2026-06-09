@@ -377,6 +377,8 @@ void DataStore::loadChannels(DataStoreHost* host) {
     if (file) {
       bool full = false;
       uint8_t channel_idx = 0;
+      size_t fsize = file.size();
+      bool has_send_scope = (fsize > 0 && (fsize % (4 + 32 + 32 + 16)) == 0);
       while (!full) {
         ChannelDetails ch;
         uint8_t unused[4];
@@ -384,6 +386,12 @@ void DataStore::loadChannels(DataStoreHost* host) {
         bool success = (file.read(unused, 4) == 4);
         success = success && (file.read((uint8_t *)ch.name, 32) == 32);
         success = success && (file.read((uint8_t *)ch.channel.secret, 32) == 32);
+
+        if (success && has_send_scope) {
+          success = success && (file.read((uint8_t *)ch.channel.send_scope.key, 16) == 16);
+        } else if (success) {
+          memset(ch.channel.send_scope.key, 0, 16);
+        }
 
         if (!success) break; // EOF
 
@@ -409,6 +417,7 @@ void DataStore::saveChannels(DataStoreHost* host) {
       bool success = (file.write(unused, 4) == 4);
       success = success && (file.write((uint8_t *)ch.name, 32) == 32);
       success = success && (file.write((uint8_t *)ch.channel.secret, 32) == 32);
+      success = success && (file.write((uint8_t *)ch.channel.send_scope.key, 16) == 16);
 
       if (!success) break; // write failed
       channel_idx++;

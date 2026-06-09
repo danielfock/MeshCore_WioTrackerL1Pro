@@ -27,12 +27,41 @@ void Dispatcher::begin() {
   tx_budget_ms = (unsigned long)(duty_cycle_window_ms * duty_cycle);
   last_budget_update = _ms->getMillis();
 
+  last_bucket_time = _ms->getMillis();
+  current_bucket_idx = 0;
+  memset(airtime_buckets, 0, sizeof(airtime_buckets));
+
   _radio->begin();
   prev_isrecv_mode = _radio->isInRecvMode();
 }
 
 float Dispatcher::getAirtimeBudgetFactor() const {
   return 1.0;
+}
+
+void Dispatcher::updateUtilisationWindow() {
+  unsigned long now = _ms->getMillis();
+  unsigned long elapsed = now - last_bucket_time;
+
+  while (elapsed >= 5000) {
+    current_bucket_idx = (current_bucket_idx + 1) % 12;
+    airtime_buckets[current_bucket_idx] = 0;
+    last_bucket_time += 5000;
+    elapsed -= 5000;
+  }
+}
+
+uint8_t Dispatcher::getChannelUtilisationPercent() {
+  updateUtilisationWindow();
+
+  unsigned long sum = 0;
+  for (int i = 0; i < 12; i++) {
+    sum += airtime_buckets[i];
+  }
+
+  unsigned long percentage = (sum * 100) / (12 * 5000);
+  if (percentage > 100) percentage = 100;
+  return (uint8_t)percentage;
 }
 
 void Dispatcher::updateTxBudget() {
@@ -64,6 +93,8 @@ uint32_t Dispatcher::getCADFailMaxDuration() const {
 }
 
 void Dispatcher::loop() {
+  updateUtilisationWindow();
+
   if (millisHasNowPassed(next_floor_calib_time)) {
     _radio->triggerNoiseFloorCalibrate(getInterferenceThreshold());
     next_floor_calib_time = futureMillis(NOISE_FLOOR_CALIB_INTERVAL);
@@ -86,6 +117,7 @@ void Dispatcher::loop() {
     if (_radio->isSendComplete()) {
       long t = _ms->getMillis() - outbound_start;
       total_air_time += t;
+      airtime_buckets[current_bucket_idx] += t;
       //Serial.print("  airtime="); Serial.println(t);
 
       updateTxBudget();
@@ -206,6 +238,7 @@ void Dispatcher::checkRecv() {
           score = _radio->packetScore(_radio->getLastSNR(), len);
           air_time = _radio->getEstAirtimeFor(len);
           rx_air_time += air_time;
+          airtime_buckets[current_bucket_idx] += air_time;
         } else {
           _mgr->free(pkt);  // put back into pool
           pkt = NULL;
