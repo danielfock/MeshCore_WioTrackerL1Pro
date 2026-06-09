@@ -1789,7 +1789,9 @@ void UITask::adjustGpsSetting(int delta) {
       if (_node_prefs->gps_tracker_active) {
         _node_prefs->gps_enabled = 1;
       }
+#if ENV_INCLUDE_GPS == 1
       the_mesh.applyGpsPrefs();
+#endif
       break;
     case 3:
       _node_prefs->gps_tracker_position_sharing = _node_prefs->gps_tracker_position_sharing ? 0 : 1;
@@ -2431,7 +2433,9 @@ void UITask::toggleGPS() {
   if (_sensors) {
     bool enabled = getGPSState();
     _node_prefs->gps_enabled = enabled ? 0 : 1;
+#if ENV_INCLUDE_GPS == 1
     the_mesh.applyGpsPrefs();
+#endif
     the_mesh.savePrefs();
     showAlert(_node_prefs->gps_enabled ? "GPS enabled" : "GPS disabled", 800);
   }

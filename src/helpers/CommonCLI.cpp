@@ -271,7 +271,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         strcpy(reply, "ERR: bad pubkey");
       }
     } else if (memcmp(command, "tempradio ", 10) == 0) {
-      strcpy(tmp, &command[10]);
+      StrHelper::strncpy(tmp, &command[10], sizeof(tmp));
       const char *parts[5];
       int num = mesh::Utils::parseTextParts(tmp, parts, 5);
       float freq  = num > 0 ? strtof(parts[0], nullptr) : 0.0f;
@@ -313,7 +313,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         strcpy(reply, "null");
       }
     } else if (memcmp(command, "sensor set ", 11) == 0) {
-      strcpy(tmp, &command[11]);
+      StrHelper::strncpy(tmp, &command[11], sizeof(tmp));
       const char *parts[2];
       int num = mesh::Utils::parseTextParts(tmp, parts, 2, ' ');
       const char *key = (num > 0) ? parts[0] : "";
@@ -557,7 +557,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     _callbacks->setRxBoostedGain(_prefs->rx_boosted_gain);
 #endif
   } else if (memcmp(config, "radio ", 6) == 0) {
-    strcpy(tmp, &config[6]);
+    StrHelper::strncpy(tmp, &config[6], sizeof(tmp));
     const char *parts[4];
     int num = mesh::Utils::parseTextParts(tmp, parts, 4);
     float freq  = num > 0 ? strtof(parts[0], nullptr) : 0.0f;
@@ -891,7 +891,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     strcpy(reply, "ERROR: Power management not supported");
 #endif
   } else {
-    sprintf(reply, "??: %s", config);
+    snprintf(reply, CLI_REPLY_MAX_LEN, "??: %s", config);
   }
 }
 
@@ -930,9 +930,9 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     if (region) {
       auto parent = _region_map->findById(region->parent);
       if (parent && parent->id != 0) {
-        sprintf(reply, " %s (%s) %s", region->name, parent->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
+        snprintf(reply, 160, " %s (%s) %s", region->name, parent->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
       } else {
-        sprintf(reply, " %s %s", region->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
+        snprintf(reply, 160, " %s %s", region->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
       }
     } else {
       strcpy(reply, "Err - unknown region");
@@ -941,19 +941,19 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     auto home = _region_map->findByNamePrefix(parts[2]);
     if (home) {
       _region_map->setHomeRegion(home);
-      sprintf(reply, " home is now %s", home->name);
+      snprintf(reply, 160, " home is now %s", home->name);
     } else {
       strcpy(reply, "Err - unknown region");
     }
   } else if (n == 2 && strcmp(parts[1], "home") == 0) {
     auto home = _region_map->getHomeRegion();
-    sprintf(reply, " home is %s", home ? home->name : "*");
+    snprintf(reply, 160, " home is %s", home ? home->name : "*");
   } else if (n >= 3 && strcmp(parts[1], "default") == 0) {
     if (strcmp(parts[2], "<null>") == 0) {
       _region_map->setDefaultRegion(NULL);
       _callbacks->onDefaultRegionChanged(NULL);
       _callbacks->saveRegions();  // persist in one atomic step
-      sprintf(reply, " default scope is now <null>");
+      snprintf(reply, 160, " default scope is now <null>");
     } else {
       auto def = _region_map->findByNamePrefix(parts[2]);
       if (def == NULL) {
@@ -964,14 +964,14 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
         _region_map->setDefaultRegion(def);
         _callbacks->onDefaultRegionChanged(def);
         _callbacks->saveRegions();  // persist in one atomic step
-        sprintf(reply, " default scope is now %s", def->name);
+        snprintf(reply, 160, " default scope is now %s", def->name);
       } else {
         strcpy(reply, "Err - region table full");
       }
     }
   } else if (n == 2 && strcmp(parts[1], "default") == 0) {
     auto def = _region_map->getDefaultRegion();
-    sprintf(reply, " default scope is %s", def ? def->name : "<null>");
+    snprintf(reply, 160, " default scope is %s", def ? def->name : "<null>");
   } else if (n >= 3 && strcmp(parts[1], "put") == 0) {
     auto parent = n >= 4 ? _region_map->findByNamePrefix(parts[3]) : &(_region_map->getWildcard());
     if (parent == NULL) {

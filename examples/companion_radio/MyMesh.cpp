@@ -672,11 +672,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     memcpy(&out_frame[i], extra, extra_len);
     i += extra_len;
   }
-  int tlen = strlen(text);
-  if (i + tlen > MAX_FRAME_SIZE) {
-    tlen = MAX_FRAME_SIZE - i;
-    while (tlen > 0 && (text[tlen] & 0xc0) == 0x80) { tlen--; } // don't split UTF-8 char
-  }
+  int tlen = StrHelper::getUtf8TruncatedLen(text, MAX_FRAME_SIZE - i);
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
   addToOfflineQueue(out_frame, i);
@@ -737,11 +733,14 @@ void MyMesh::sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, ui
   sendFloodScoped(*scope, pkt, delay_millis);
 }
 void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis) {
-  // TODO: have per-channel send_scope
   TransportKey default_scope;
-  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
-
-  auto scope = send_scope.isNull() ? &default_scope : &send_scope;
+  const TransportKey* scope;
+  if (!channel.send_scope.isNull()) {
+    scope = &channel.send_scope;
+  } else {
+    memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+    scope = send_scope.isNull() ? &default_scope : &send_scope;
+  }
   sendFloodScoped(*scope, pkt, delay_millis);
 }
 
@@ -1297,11 +1296,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   out_frame[i++] = TXT_TYPE_PLAIN;
   memcpy(&out_frame[i], &timestamp, 4);
   i += 4;
-  int tlen = strlen(text);
-  if (i + tlen > MAX_FRAME_SIZE) {
-    tlen = MAX_FRAME_SIZE - i;
-    while (tlen > 0 && (text[tlen] & 0xc0) == 0x80) { tlen--; } // don't split UTF-8 char
-  }
+  int tlen = StrHelper::getUtf8TruncatedLen(text, MAX_FRAME_SIZE - i);
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
   addToOfflineQueue(out_frame, i);
@@ -1486,7 +1481,7 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
   }
 }
 
-bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) {
+bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len, uint32_t path_timestamp) {
   if (extra_type == PAYLOAD_TYPE_RESPONSE && extra_len > 4) {
     uint32_t tag;
     memcpy(&tag, extra, 4);
@@ -1514,7 +1509,7 @@ bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t i
     }
   }
   // let base class handle received path and data
-  return BaseChatMesh::onContactPathRecv(contact, in_path, in_path_len, out_path, out_path_len, extra_type, extra, extra_len);
+  return BaseChatMesh::onContactPathRecv(contact, in_path, in_path_len, out_path, out_path_len, extra_type, extra, extra_len, path_timestamp);
 }
 
 void MyMesh::onControlDataRecv(mesh::Packet *packet) {
@@ -2459,6 +2454,8 @@ void MyMesh::handleCmdFrame(size_t len) {
       i += 32;
       memcpy(&out_frame[i], channel.channel.secret, 16);
       i += 16; // NOTE: only 128-bit supported
+      memcpy(&out_frame[i], channel.channel.send_scope.key, 16);
+      i += 16;
       _serial->writeFrame(out_frame, i);
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND);
@@ -2471,6 +2468,11 @@ void MyMesh::handleCmdFrame(size_t len) {
     StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
     memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
     memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
+    if (len >= 2 + 32 + 16 + 16) {
+      memcpy(channel.channel.send_scope.key, &cmd_frame[2 + 32 + 16], 16);
+    } else {
+      memset(channel.channel.send_scope.key, 0, 16);
+    }
     if (setChannel(channel_idx, channel)) {
       saveChannels();
       writeOKFrame();

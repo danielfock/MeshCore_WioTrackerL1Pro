@@ -76,11 +76,6 @@
   #define I2C_PMU_ADD    0x34
 #endif
 
-// enum RadioType {
-//   SX1262, 
-//   SX1276
-// };
-
 // Include headers AFTER pin definitions so ESP32Board::sleep() can use P_LORA_DIO_1
 #include <Wire.h>
 #include <Arduino.h>
@@ -91,8 +86,6 @@
 class TBeamBoard : public ESP32Board {
 XPowersLibInterface *PMU = NULL;
 //PhysicalLayer * pl;
-//RadioType * radio = NULL;
-// int radioVersions = 2;
 
 enum {
   POWERMANAGE_ONLINE  = _BV(0),
@@ -112,7 +105,6 @@ enum {
 };
 
 bool power_init();
-//void radiotype_detect();
 
 public:
 
