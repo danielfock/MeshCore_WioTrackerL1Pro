@@ -73,12 +73,14 @@ static File openAppend(FILESYSTEM* _fs, const char* fname) {
   #endif
 }
 
-static uint8_t getDataSize(uint8_t type) {
+static uint8_t getDataSize(uint8_t type, const uint8_t* buf = nullptr) {
     switch (type) {
       case LPP_GPS:
         return 9;
       case LPP_POLYLINE:
-        return 8;  // TODO: this is MINIMIUM
+        // LPP_POLYLINE size byte gives the total block size. So if buf points to
+        // the size byte, buf[0] is the total size of the block after channel and type bytes.
+        return buf ? buf[0] : 8;  // 8 is the MINIMUM
       case LPP_GYROMETER:
       case LPP_ACCELEROMETER:
         return 6;
@@ -875,7 +877,7 @@ float SensorMesh::getTelemValue(uint8_t channel, uint8_t type) {
     uint8_t ch = buf[i++];
     // Get data type
     uint8_t t = buf[i++];
-    uint8_t sz = getDataSize(t);
+    uint8_t sz = getDataSize(t, &buf[i]);
 
     if (ch == channel && t == type) {
       return getFloat(&buf[i], sz, getMultiplier(t), isSigned(t));
