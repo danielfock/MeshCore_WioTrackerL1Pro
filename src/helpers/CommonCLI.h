@@ -19,6 +19,8 @@
 #define LOOP_DETECT_MODERATE  2
 #define LOOP_DETECT_STRICT    3
 
+#define CLI_REPLY_MAX_LEN     160
+
 struct NodePrefs { // persisted to file
   float airtime_factor;
   char node_name[32];

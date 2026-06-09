@@ -891,7 +891,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     strcpy(reply, "ERROR: Power management not supported");
 #endif
   } else {
-    sprintf(reply, "??: %s", config);
+    snprintf(reply, CLI_REPLY_MAX_LEN, "??: %s", config);
   }
 }
 
