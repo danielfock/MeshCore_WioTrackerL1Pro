@@ -930,9 +930,9 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     if (region) {
       auto parent = _region_map->findById(region->parent);
       if (parent && parent->id != 0) {
-        sprintf(reply, " %s (%s) %s", region->name, parent->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
+        snprintf(reply, 160, " %s (%s) %s", region->name, parent->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
       } else {
-        sprintf(reply, " %s %s", region->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
+        snprintf(reply, 160, " %s %s", region->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
       }
     } else {
       strcpy(reply, "Err - unknown region");
@@ -941,19 +941,19 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     auto home = _region_map->findByNamePrefix(parts[2]);
     if (home) {
       _region_map->setHomeRegion(home);
-      sprintf(reply, " home is now %s", home->name);
+      snprintf(reply, 160, " home is now %s", home->name);
     } else {
       strcpy(reply, "Err - unknown region");
     }
   } else if (n == 2 && strcmp(parts[1], "home") == 0) {
     auto home = _region_map->getHomeRegion();
-    sprintf(reply, " home is %s", home ? home->name : "*");
+    snprintf(reply, 160, " home is %s", home ? home->name : "*");
   } else if (n >= 3 && strcmp(parts[1], "default") == 0) {
     if (strcmp(parts[2], "<null>") == 0) {
       _region_map->setDefaultRegion(NULL);
       _callbacks->onDefaultRegionChanged(NULL);
       _callbacks->saveRegions();  // persist in one atomic step
-      sprintf(reply, " default scope is now <null>");
+      snprintf(reply, 160, " default scope is now <null>");
     } else {
       auto def = _region_map->findByNamePrefix(parts[2]);
       if (def == NULL) {
@@ -964,14 +964,14 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
         _region_map->setDefaultRegion(def);
         _callbacks->onDefaultRegionChanged(def);
         _callbacks->saveRegions();  // persist in one atomic step
-        sprintf(reply, " default scope is now %s", def->name);
+        snprintf(reply, 160, " default scope is now %s", def->name);
       } else {
         strcpy(reply, "Err - region table full");
       }
     }
   } else if (n == 2 && strcmp(parts[1], "default") == 0) {
     auto def = _region_map->getDefaultRegion();
-    sprintf(reply, " default scope is %s", def ? def->name : "<null>");
+    snprintf(reply, 160, " default scope is %s", def ? def->name : "<null>");
   } else if (n >= 3 && strcmp(parts[1], "put") == 0) {
     auto parent = n >= 4 ? _region_map->findByNamePrefix(parts[3]) : &(_region_map->getWildcard());
     if (parent == NULL) {
