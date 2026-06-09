@@ -70,6 +70,7 @@
 
 #include <helpers/BaseChatMesh.h>
 #include <helpers/TransportKeyStore.h>
+#include <helpers/MeshScopeResolver.h>
 
 /* -------------------------------------------------------------------------------------- */
 
@@ -87,7 +88,7 @@ struct AdvertPath {
 
 class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
-  MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
+  MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL, MeshScopeResolver* scope_resolver=NULL);
 
   void begin(bool has_display);
   void startInterface(BaseSerialInterface &serial);
@@ -123,6 +124,7 @@ protected:
   uint8_t getExtraAckTransmitCount() const override;
   bool filterRecvFloodPacket(mesh::Packet* packet) override;
   bool allowPacketForward(const mesh::Packet* packet) override;
+  void onContactPacketRecv(ContactInfo& from, mesh::Packet* packet) override;
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis);
   void sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis=0) override;
@@ -254,6 +256,10 @@ private:
   uint32_t pending_req;   // pending _BINARY_REQ
   BaseSerialInterface *_serial;
   AbstractUITask* _ui;
+  MeshScopeResolver* _scope_resolver;
+  TransportKey recv_pkt_scope;
+  mesh::Packet* recv_pkt_ptr;
+  bool has_recv_pkt_scope;
 
   ContactsIterator _iter;
   uint32_t _iter_filter_since;
