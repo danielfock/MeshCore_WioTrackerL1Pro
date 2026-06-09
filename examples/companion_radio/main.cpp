@@ -99,12 +99,80 @@ static uint32_t _atoi(const char* sp) {
   UITask ui_task(&board, &serial_interface);
 #endif
 
+#include <helpers/RegionMap.h>
+
+class CompanionScopeResolver : public MeshScopeResolver {
+  RegionMap& _region_map;
+
+  struct CacheEntry {
+    uint8_t pub_key[PUB_KEY_SIZE];
+    TransportKey scope;
+    bool in_use;
+  };
+  CacheEntry cache[8];
+  int next_idx;
+
+public:
+  CompanionScopeResolver(RegionMap& region_map) : _region_map(region_map), next_idx(0) {
+    for (int i = 0; i < 8; i++) cache[i].in_use = false;
+  }
+
+  bool resolveScope(const ContactInfo& contact, TransportKey& out_key) override {
+    for (int i = 0; i < 8; i++) {
+      if (cache[i].in_use && memcmp(cache[i].pub_key, contact.id.pub_key, PUB_KEY_SIZE) == 0) {
+        out_key = cache[i].scope;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool resolvePacketToScope(mesh::Packet* packet, TransportKey& out_key) override {
+    RegionEntry* matched_region = _region_map.findMatch(packet, 0); // 0 mask for all regions
+    if (matched_region) {
+      TransportKey keys[4];
+      int num = _region_map.getTransportKeysFor(*matched_region, keys, 4);
+      for (int j = 0; j < num; j++) {
+        uint16_t code = keys[j].calcTransportCode(packet);
+        if (code == packet->transport_codes[1] || code == packet->transport_codes[0]) {
+          out_key = keys[j];
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  void recordContactRegion(const ContactInfo& contact, const TransportKey& scope) override {
+    int use_idx = next_idx;
+    for (int i = 0; i < 8; i++) {
+      if (cache[i].in_use && memcmp(cache[i].pub_key, contact.id.pub_key, PUB_KEY_SIZE) == 0) {
+        use_idx = i;
+        break;
+      }
+    }
+    memcpy(cache[use_idx].pub_key, contact.id.pub_key, PUB_KEY_SIZE);
+    cache[use_idx].scope = scope;
+    cache[use_idx].in_use = true;
+
+    if (use_idx == next_idx) {
+      next_idx = (next_idx + 1) % 8;
+    }
+  }
+};
+
 StdRNG fast_rng;
 SimpleMeshTables tables;
+TransportKeyStore tk_store;
+RegionMap region_map(tk_store);
+CompanionScopeResolver scope_resolver(region_map);
 MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
    #ifdef DISPLAY_CLASS
       , &ui_task
+   #else
+      , NULL
    #endif
+   , &scope_resolver
 );
 
 /* END GLOBAL OBJECTS */
