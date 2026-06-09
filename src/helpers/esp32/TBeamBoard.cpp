@@ -25,8 +25,6 @@ void TBeamBoard::begin() {
       digitalWrite(P_LORA_TX_LED, HIGH); //inverted pin for SX1276 - HIGH for off
     #endif
 
-    //radiotype_detect();
-
     esp_reset_reason_t reason = esp_reset_reason();
     if (reason == ESP_RST_DEEPSLEEP) {
       long wakeup_source = esp_sleep_get_ext1_wakeup_status();
@@ -284,67 +282,5 @@ bool TBeamBoard::power_init()
   PMU->setPowerKeyPressOffTime(XPOWERS_POWEROFF_4S);
   return true;
 }
-
-#pragma region "Debug code"
-// void TBeamBoard::radiotype_detect(){
-
-//   static SPIClass spi;
-//   char  chipTypeInfo;
-
-//   #if defined(P_LORA_SCLK)
-//     spi.begin(P_LORA_SCLK, P_LORA_MISO, P_LORA_MOSI);
-//   #endif
-
-//   for(int i = 0; i<radioVersions; i++){
-//     switch(i){
-//       case 0: 
-//         CustomSX1262 radio = new Module(P_LORA_NSS, P_LORA_DIO_0, P_LORA_RESET, P_LORA_DIO_1, spi);
-//         int status = radio.begin(LORA_FREQ, LORA_BW, LORA_SF, LORA_CR, RADIOLIB_SX126X_SYNC_WORD_PRIVATE, LORA_TX_POWER, 8);
-//         if (status != RADIOLIB_ERR_NONE) {
-//           Serial.print("ERROR: SX1262 not found: ");
-//           Serial.println(status);
-//           //delete radio;
-//           radio = NULL;
-//           break;
-//         }
-//         else{
-//           MESH_DEBUG_PRINTLN("SX1262 detected");
-//           P_LORA_BUSY = 32;
-//           RADIO_CLASS = CustomSX1262;
-//           WRAPPER_CLASS = CustomSX1262Wrapper;
-//           SX126X_RX_BOOSTED_GAIN = true;
-//           SX126X_CURRENT_LIMIT = 140;
-//           //delete radio;
-//           radio = NULL;
-//           break;
-//         }
-//       case 1:
-//         SX1276 radio = new Module(P_LORA_NSS, P_LORA_DIO_0, P_LORA_RESET, P_LORA_DIO_1, spi);
-//         int status1 = radio.begin(LORA_FREQ, LORA_BW, LORA_SF, LORA_CR, RADIOLIB_SX126X_SYNC_WORD_PRIVATE, LORA_TX_POWER, 8);
-//         if (status1 != RADIOLIB_ERR_NONE) {
-//           Serial.print("ERROR: SX1272 not found: ");
-//           Serial.println(status1);
-//           //delete radio;
-//           radio = NULL;
-//         }
-//         else{
-//           MESH_DEBUG_PRINTLN("SX1272 detected");
-//           P_LORA_BUSY = RADIOLIB_NC;
-//           P_LORA_DIO_2 = 32;
-//           RADIO_CLASS = CustomSX1272;
-//           WRAPPER_CLASS = CustomSX1272Wrapper;
-//           SX127X_CURRENT_LIMIT = 120;
-//           //delete radio;
-//           radio = NULL;
-//           return;
-//         }
-//         default:
-//     }
-//   }
-
-
-  
-// }
-#pragma endregion
 
 #endif
