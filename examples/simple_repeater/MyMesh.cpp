@@ -205,8 +205,8 @@ uint8_t MyMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender
     if (_prefs.disable_fwd) {   // is this repeater currently disabled
       reply_data[8] |= 0x80;  // is disabled
     }
-    // TODO:  add some kind of moving-window utilisation metric, so can query 'how busy' is this repeater
-    return 9;   // reply length
+    reply_data[9] = getChannelUtilisationPercent();
+    return 10;   // reply length
   }
   return 0;
 }
