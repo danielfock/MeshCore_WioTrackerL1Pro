@@ -526,10 +526,22 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       client->last_timestamp = sender_timestamp;
 
       uint32_t now = getRTCClock()->getCurrentTime();
-      client->last_activity = now; // <-- THIS will keep client connection alive
-      client->extra.room.push_failures = 0;   // reset so push can resume (if prev failed)
 
       if (data[4] == REQ_TYPE_KEEP_ALIVE && packet->isRouteDirect()) { // request type
+        // Throttle KEEP_ALIVE requests!
+        // if client sends too quickly, evict()
+        if (now - client->extra.room.last_keep_alive < 10) {
+          MESH_DEBUG_PRINTLN("Client sending KEEP_ALIVE too quickly, evicting...");
+          client->last_activity = 0; // evict client
+          client->out_path_len = OUT_PATH_UNKNOWN;
+          client->extra.room.pending_ack = 0;
+          return;
+        }
+
+        client->extra.room.last_keep_alive = now;
+        client->last_activity = now; // <-- THIS will keep client connection alive
+        client->extra.room.push_failures = 0;   // reset so push can resume (if prev failed)
+
         uint32_t forceSince = 0;
         if (len >= 9) {                     // optional - last post_timestamp client received
           memcpy(&forceSince, &data[5], 4); // NOTE: this may be 0, if part of decrypted PADDING!
@@ -541,9 +553,6 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         }
 
         client->extra.room.pending_ack = 0;
-
-        // TODO: Throttle KEEP_ALIVE requests!
-        // if client sends too quickly, evict()
 
         // RULE: only send keep_alive response DIRECT!
         if (client->out_path_len != OUT_PATH_UNKNOWN) {
@@ -557,6 +566,9 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           }
         }
       } else {
+        client->last_activity = now; // <-- THIS will keep client connection alive
+        client->extra.room.push_failures = 0;   // reset so push can resume (if prev failed)
+
         int reply_len = handleRequest(client, sender_timestamp, &data[4], len - 4);
         if (reply_len > 0) { // valid command
           if (packet->isRouteFlood()) {
