@@ -672,9 +672,10 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     memcpy(&out_frame[i], extra, extra_len);
     i += extra_len;
   }
-  int tlen = strlen(text); // TODO: UTF-8 ??
+  int tlen = strlen(text);
   if (i + tlen > MAX_FRAME_SIZE) {
     tlen = MAX_FRAME_SIZE - i;
+    while (tlen > 0 && (text[tlen] & 0xc0) == 0x80) { tlen--; } // don't split UTF-8 char
   }
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
@@ -1296,9 +1297,10 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   out_frame[i++] = TXT_TYPE_PLAIN;
   memcpy(&out_frame[i], &timestamp, 4);
   i += 4;
-  int tlen = strlen(text); // TODO: UTF-8 ??
+  int tlen = strlen(text);
   if (i + tlen > MAX_FRAME_SIZE) {
     tlen = MAX_FRAME_SIZE - i;
+    while (tlen > 0 && (text[tlen] & 0xc0) == 0x80) { tlen--; } // don't split UTF-8 char
   }
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
