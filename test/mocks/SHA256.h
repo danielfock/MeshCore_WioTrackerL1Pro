@@ -9,7 +9,7 @@
 #include <vector>
 
 struct SHA256UpdateRecord {
-    std::vector<uint8_t> data;
+  std::vector<uint8_t> data;
 };
 
 extern std::vector<SHA256UpdateRecord> g_sha256_updates;
