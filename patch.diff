@@ -1,20 +1,10 @@
-<<<<<<< SEARCH
-  if (num_cache < MAX_TKS_ENTRIES) {
-    cache_ids[num_cache] = id;
-    cache_keys[num_cache] = key;
-    num_cache++;
-  } else {
-    // TODO: evict oldest cache entry
+    _store->getAutoKeyFor(src.id, src.name, dest[0]);
+    num = 1;
+  } else {   // new: implicit auto hashtag region
+    char tmp[sizeof(src.name) + 1];
+    tmp[0] = '#';
+    StrHelper::strncpy(&tmp[1], src.name, sizeof(tmp) - 1);
+    _store->getAutoKeyFor(src.id, tmp, dest[0]);
+    num = 1;
   }
-=======
-  if (num_cache < MAX_TKS_ENTRIES) {
-    cache_ids[num_cache] = id;
-    cache_keys[num_cache] = key;
-    num_cache++;
-  } else {
-    memmove(&cache_ids[0], &cache_ids[1], (MAX_TKS_ENTRIES - 1) * sizeof(cache_ids[0]));
-    memmove(&cache_keys[0], &cache_keys[1], (MAX_TKS_ENTRIES - 1) * sizeof(cache_keys[0]));
-    cache_ids[MAX_TKS_ENTRIES - 1] = id;
-    cache_keys[MAX_TKS_ENTRIES - 1] = key;
-  }
->>>>>>> REPLACE
+  return num;
