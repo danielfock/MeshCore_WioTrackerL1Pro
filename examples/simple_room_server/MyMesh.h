@@ -72,6 +72,10 @@
   #define SERVER_RESPONSE_DELAY   300
 #endif
 
+#ifndef MAX_CLIENT_INACTIVE_SECS
+  #define MAX_CLIENT_INACTIVE_SECS  (12 * 60 * 60)
+#endif
+
 #ifndef TXT_ACK_DELAY
   #define TXT_ACK_DELAY     200
 #endif

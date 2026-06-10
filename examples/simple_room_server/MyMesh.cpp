@@ -1035,6 +1035,21 @@ void MyMesh::loop() {
   }
 
   // TODO: periodically check for OLD/inactive entries in known_clients[], and evict
+  static uint32_t next_evict_check = 0;
+  if (millisHasNowPassed(next_evict_check)) {
+    next_evict_check = futureMillis(60000);  // check every 1 minute
+    uint32_t curr_time = getRTCClock()->getCurrentTime();
+    for (int i = acl.getNumClients() - 1; i >= 0; i--) {
+      auto c = acl.getClientByIdx(i);
+      if (!c->isAdmin() && c->last_activity > 0 && (curr_time - c->last_activity > MAX_CLIENT_INACTIVE_SECS)) {
+        MESH_DEBUG_PRINTLN("Evicting inactive client %02X", (uint32_t)c->id.pub_key[0]);
+        acl.removeClient(i);
+        if (next_client_idx >= acl.getNumClients()) {
+           next_client_idx = 0;
+        }
+      }
+    }
+  }
 
   // update uptime
   uint32_t now = millis();
