@@ -58,4 +58,5 @@ public:
 
   int getNumClients() const { return num_clients; }
   ClientInfo* getClientByIdx(int idx) { return &clients[idx]; }
+  bool removeClient(int idx);
 };
