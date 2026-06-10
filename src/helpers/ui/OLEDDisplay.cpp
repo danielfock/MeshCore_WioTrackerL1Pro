@@ -1125,18 +1125,19 @@ char* OLEDDisplay::utf8ascii(const String &str) {
   uint16_t k = 0;
   uint16_t length = str.length() + 1;
 
-  // Copy the string into a char array
+  // Allocate a char array for the result
   char* s = (char*) malloc(length * sizeof(char));
   if(!s) {
     DEBUG_OLEDDISPLAY("[OLEDDISPLAY][utf8ascii] Can't allocate another char array. Drop support for UTF-8.\n");
     return (char*) str.c_str();
   }
-  str.toCharArray(s, length);
 
   length--;
 
+  const char *p = str.c_str();
+
   for (uint16_t i=0; i < length; i++) {
-    char c = (this->fontTableLookupFunction)(s[i]);
+    char c = (this->fontTableLookupFunction)(p[i]);
     if (c!=0) {
       s[k++]=c;
     }
