@@ -23,6 +23,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/ClientACL.h>
 #include <helpers/RegionMap.h>
+#include <helpers/RateLimiter.h>
 #include <RTClib.h>
 #include <target.h>
 
@@ -140,6 +141,7 @@ private:
   unsigned long dirty_contacts_expiry;
   CayenneLPP telemetry;
   TransportKeyStore key_store;
+  RateLimiter discover_limiter;
   RegionMap region_map;
   TransportKey default_scope;
   uint32_t last_read_time;
