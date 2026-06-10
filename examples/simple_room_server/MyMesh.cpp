@@ -1034,7 +1034,6 @@ void MyMesh::loop() {
     dirty_contacts_expiry = 0;
   }
 
-  // TODO: periodically check for OLD/inactive entries in known_clients[], and evict
   static uint32_t next_evict_check = 0;
   if (millisHasNowPassed(next_evict_check)) {
     next_evict_check = futureMillis(60000);  // check every 1 minute
