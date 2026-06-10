@@ -153,6 +153,26 @@ const char* StrHelper::ftoa3(float f) {
   return s;
 }
 
+int StrHelper::getUtf8TruncatedLen(const char* text, int max_bytes) {
+  int len = 0;
+  while (text[len] != '\0' && len < max_bytes) {
+    len++;
+  }
+
+  if (len < max_bytes || text[len] == '\0') {
+    return len;
+  }
+
+  // If we're cutting the string, we need to ensure we don't cut in the middle of a UTF-8 char.
+  // A UTF-8 continuation byte starts with 10xxxxxx (0x80 to 0xBF).
+  while (len > 0 && (text[len] & 0xC0) == 0x80) {
+    len--;
+  }
+  // Now text[len] is either an ASCII char or the start of a multi-byte char.
+  // We can just cut before this character.
+  return len;
+}
+
 uint32_t StrHelper::fromHex(const char* src) {
   uint32_t n = 0;
   while (*src) {

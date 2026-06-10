@@ -73,12 +73,14 @@ static File openAppend(FILESYSTEM* _fs, const char* fname) {
   #endif
 }
 
-static uint8_t getDataSize(uint8_t type) {
+static uint8_t getDataSize(uint8_t type, const uint8_t* buf = nullptr) {
     switch (type) {
       case LPP_GPS:
         return 9;
       case LPP_POLYLINE:
-        return 8;  // TODO: this is MINIMIUM
+        // LPP_POLYLINE size byte gives the total block size. So if buf points to
+        // the size byte, buf[0] is the total size of the block after channel and type bytes.
+        return buf ? buf[0] : 8;  // 8 is the MINIMUM
       case LPP_GYROMETER:
       case LPP_ACCELEROMETER:
         return 6;
@@ -627,8 +629,8 @@ bool SensorMesh::handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t
 
 void SensorMesh::onControlDataRecv(mesh::Packet* packet) {
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
-  if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6) {
-    // TODO: apply rate limiting to these!
+  if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
+      && discover_limiter.allow(getRTCClock()->getCurrentTime())) {
     int i = 1;
     uint8_t  filter = packet->payload[i++];
     uint32_t tag;
@@ -655,7 +657,7 @@ void SensorMesh::onControlDataRecv(mesh::Packet* packet) {
   }
 }
 
-bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) {
+bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len, uint32_t path_timestamp) {
   int i = matching_peer_indexes[sender_idx];
   if (i < 0 || i >= acl.getNumClients()) {
     MESH_DEBUG_PRINTLN("onPeerPathRecv: Invalid sender idx: %d", i);
@@ -663,6 +665,13 @@ bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint
   }
 
   ClientInfo* from = acl.getClientByIdx(i);
+
+  if (path_timestamp > 0 && path_timestamp < from->last_timestamp) {
+    MESH_DEBUG_PRINTLN("onPeerPathRecv: possible replay attack detected");
+    return false;
+  } else if (path_timestamp > 0) {
+    from->last_timestamp = path_timestamp;
+  }
 
   MESH_DEBUG_PRINTLN("PATH to contact, path_len=%d", (uint32_t) path_len);
   // NOTE: for this impl, we just replace the current 'out_path' regardless, whenever sender sends us a new out_path.
@@ -697,6 +706,7 @@ void SensorMesh::onAckRecv(mesh::Packet* packet, uint32_t ack_crc) {
 SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables)
      : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
       region_map(key_store),
+      discover_limiter(4, 120),  // max 4 every 2 minutes
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
       telemetry(MAX_PACKET_PAYLOAD - 4)
 {
@@ -868,7 +878,7 @@ float SensorMesh::getTelemValue(uint8_t channel, uint8_t type) {
     uint8_t ch = buf[i++];
     // Get data type
     uint8_t t = buf[i++];
-    uint8_t sz = getDataSize(t);
+    uint8_t sz = getDataSize(t, &buf[i]);
 
     if (ch == channel && t == type) {
       return getFloat(&buf[i], sz, getMultiplier(t), isSigned(t));
