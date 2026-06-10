@@ -58,7 +58,7 @@ int TransportKeyStore::loadKeysFor(uint16_t id, TransportKey keys[], int max_num
   }
   if (n > 0) return n;   // cache hit!
 
-  // Hardware keystore retrieval not currently implemented.
+  // Hardware keystore retrieval is not currently implemented.
 
   // store in cache (if room)
   for (int i = 0; i < n; i++) {
