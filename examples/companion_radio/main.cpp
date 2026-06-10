@@ -16,43 +16,8 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
-#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-  #ifndef WIO_WATCHDOG_TIMEOUT_MS
-    #define WIO_WATCHDOG_TIMEOUT_MS 60000UL
-  #endif
 
-static bool g_watchdog_enabled = false;
 
-static void feed_watchdog() {
-  if (g_watchdog_enabled) {
-    NRF_WDT->RR[0] = WDT_RR_RR_Reload;
-  }
-}
-
-static void init_watchdog() {
-  if (g_watchdog_enabled) {
-    return;
-  }
-
-  if (!NRF_WDT->RUNSTATUS) {
-    uint64_t reload_ticks = ((uint64_t)WIO_WATCHDOG_TIMEOUT_MS * 32768ULL) / 1000ULL;
-    if (reload_ticks == 0) {
-      reload_ticks = 1;
-    }
-
-    NRF_WDT->CONFIG =
-      (WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos) |
-      (WDT_CONFIG_HALT_Pause << WDT_CONFIG_HALT_Pos);
-    NRF_WDT->CRV = (uint32_t)reload_ticks;
-    NRF_WDT->RREN = (WDT_RREN_RR0_Enabled << WDT_RREN_RR0_Pos);
-    NRF_WDT->TASKS_START = 1;
-    __DSB();
-    __ISB();
-  }
-
-  g_watchdog_enabled = true;
-  feed_watchdog();
-}
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -134,12 +99,80 @@ static void init_watchdog() {
   UITask ui_task(&board, &serial_interface);
 #endif
 
+#include <helpers/RegionMap.h>
+
+class CompanionScopeResolver : public MeshScopeResolver {
+  RegionMap& _region_map;
+
+  struct CacheEntry {
+    uint8_t pub_key[PUB_KEY_SIZE];
+    TransportKey scope;
+    bool in_use;
+  };
+  CacheEntry cache[8];
+  int next_idx;
+
+public:
+  CompanionScopeResolver(RegionMap& region_map) : _region_map(region_map), next_idx(0) {
+    for (int i = 0; i < 8; i++) cache[i].in_use = false;
+  }
+
+  bool resolveScope(const ContactInfo& contact, TransportKey& out_key) override {
+    for (int i = 0; i < 8; i++) {
+      if (cache[i].in_use && memcmp(cache[i].pub_key, contact.id.pub_key, PUB_KEY_SIZE) == 0) {
+        out_key = cache[i].scope;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool resolvePacketToScope(mesh::Packet* packet, TransportKey& out_key) override {
+    RegionEntry* matched_region = _region_map.findMatch(packet, 0); // 0 mask for all regions
+    if (matched_region) {
+      TransportKey keys[4];
+      int num = _region_map.getTransportKeysFor(*matched_region, keys, 4);
+      for (int j = 0; j < num; j++) {
+        uint16_t code = keys[j].calcTransportCode(packet);
+        if (code == packet->transport_codes[1] || code == packet->transport_codes[0]) {
+          out_key = keys[j];
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  void recordContactRegion(const ContactInfo& contact, const TransportKey& scope) override {
+    int use_idx = next_idx;
+    for (int i = 0; i < 8; i++) {
+      if (cache[i].in_use && memcmp(cache[i].pub_key, contact.id.pub_key, PUB_KEY_SIZE) == 0) {
+        use_idx = i;
+        break;
+      }
+    }
+    memcpy(cache[use_idx].pub_key, contact.id.pub_key, PUB_KEY_SIZE);
+    cache[use_idx].scope = scope;
+    cache[use_idx].in_use = true;
+
+    if (use_idx == next_idx) {
+      next_idx = (next_idx + 1) % 8;
+    }
+  }
+};
+
 StdRNG fast_rng;
 SimpleMeshTables tables;
+TransportKeyStore tk_store;
+RegionMap region_map(tk_store);
+CompanionScopeResolver scope_resolver(region_map);
 MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
    #ifdef DISPLAY_CLASS
       , &ui_task
+   #else
+      , NULL
    #endif
+   , &scope_resolver
 );
 
 /* END GLOBAL OBJECTS */
@@ -264,32 +297,32 @@ void setup() {
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
 #endif
 
-#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-  init_watchdog();
+#if defined(NRF52_PLATFORM)
+  board.enableWatchdog();
 #endif
 }
 
 void loop() {
   the_mesh.loop();
-  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-    feed_watchdog();
+  #if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
   #endif
 
   sensors.loop();
-  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-    feed_watchdog();
+  #if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
   #endif
 
 #ifdef DISPLAY_CLASS
   ui_task.loop();
-  #if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-    feed_watchdog();
+  #if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
   #endif
 #endif
 
   rtc_clock.tick();
 
-#if defined(NRF52_PLATFORM) && defined(WIO_TRACKER_L1)
-  feed_watchdog();
-#endif
+#if defined(NRF52_PLATFORM)
+    board.feedWatchdog();
+  #endif
 }

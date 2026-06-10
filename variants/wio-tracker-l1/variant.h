@@ -50,6 +50,12 @@
 #define ADC_MULTIPLIER          (2.0F)
 #define ADC_RESOLUTION          (12)
 
+
+// nRF52 power management settings
+#define PWRMGT_VOLTAGE_BOOTLOCK (3300) // Won't boot below this voltage (mV)
+#define PWRMGT_LPCOMP_AIN       (7)    // AIN7 = P0.31 = PIN_VBAT_READ
+#define PWRMGT_LPCOMP_REFSEL    (3)    // 4/8 VDD (~1.65V, since AIN is VBAT/2)
+
 // Serial interfaces
 #define PIN_SERIAL1_RX          (7)
 #define PIN_SERIAL1_TX          (6)

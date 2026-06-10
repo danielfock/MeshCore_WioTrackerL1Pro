@@ -103,6 +103,10 @@ void setup() {
 #if ENABLE_ADVERT_ON_BOOT == 1
   the_mesh.sendSelfAdvertisement(16000, false);
 #endif
+
+#if defined(NRF52_PLATFORM)
+  board.enableWatchdog();
+#endif
 }
 
 void loop() {
@@ -148,6 +152,9 @@ void loop() {
 #endif
 
   the_mesh.loop();
+#if defined(NRF52_PLATFORM)
+  board.feedWatchdog();
+#endif
   sensors.loop();
 #ifdef DISPLAY_CLASS
   ui_task.loop();

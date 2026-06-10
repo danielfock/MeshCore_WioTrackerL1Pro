@@ -526,10 +526,22 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       client->last_timestamp = sender_timestamp;
 
       uint32_t now = getRTCClock()->getCurrentTime();
-      client->last_activity = now; // <-- THIS will keep client connection alive
-      client->extra.room.push_failures = 0;   // reset so push can resume (if prev failed)
 
       if (data[4] == REQ_TYPE_KEEP_ALIVE && packet->isRouteDirect()) { // request type
+        // Throttle KEEP_ALIVE requests!
+        // if client sends too quickly, evict()
+        if (now - client->extra.room.last_keep_alive < 10) {
+          MESH_DEBUG_PRINTLN("Client sending KEEP_ALIVE too quickly, evicting...");
+          client->last_activity = 0; // evict client
+          client->out_path_len = OUT_PATH_UNKNOWN;
+          client->extra.room.pending_ack = 0;
+          return;
+        }
+
+        client->extra.room.last_keep_alive = now;
+        client->last_activity = now; // <-- THIS will keep client connection alive
+        client->extra.room.push_failures = 0;   // reset so push can resume (if prev failed)
+
         uint32_t forceSince = 0;
         if (len >= 9) {                     // optional - last post_timestamp client received
           memcpy(&forceSince, &data[5], 4); // NOTE: this may be 0, if part of decrypted PADDING!
@@ -541,9 +553,6 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         }
 
         client->extra.room.pending_ack = 0;
-
-        // TODO: Throttle KEEP_ALIVE requests!
-        // if client sends too quickly, evict()
 
         // RULE: only send keep_alive response DIRECT!
         if (client->out_path_len != OUT_PATH_UNKNOWN) {
@@ -557,6 +566,9 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           }
         }
       } else {
+        client->last_activity = now; // <-- THIS will keep client connection alive
+        client->extra.room.push_failures = 0;   // reset so push can resume (if prev failed)
+
         int reply_len = handleRequest(client, sender_timestamp, &data[4], len - 4);
         if (reply_len > 0) { // valid command
           if (packet->isRouteFlood()) {
@@ -581,13 +593,20 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
 }
 
 bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t *secret, uint8_t *path,
-                            uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len) {
-  // TODO: prevent replay attacks
+                            uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len, uint32_t path_timestamp) {
   int i = matching_peer_indexes[sender_idx];
 
   if (i >= 0 && i < acl.getNumClients()) { // get from our known_clients table (sender SHOULD already be known in this context)
-    MESH_DEBUG_PRINTLN("PATH to client, path_len=%d", (uint32_t)path_len);
     auto client = acl.getClientByIdx(i);
+
+    if (path_timestamp > 0 && path_timestamp < client->last_timestamp) {
+      MESH_DEBUG_PRINTLN("onPeerPathRecv: possible replay attack detected");
+      return false;
+    } else if (path_timestamp > 0) {
+      client->last_timestamp = path_timestamp;
+    }
+
+    MESH_DEBUG_PRINTLN("PATH to client, path_len=%d", (uint32_t)path_len);
     client->out_path_len = mesh::Packet::copyPath(client->out_path, path, path_len); // store a copy of path, for sendDirect()
     client->last_activity = getRTCClock()->getCurrentTime();
   } else {
@@ -1016,6 +1035,21 @@ void MyMesh::loop() {
   }
 
   // TODO: periodically check for OLD/inactive entries in known_clients[], and evict
+  static uint32_t next_evict_check = 0;
+  if (millisHasNowPassed(next_evict_check)) {
+    next_evict_check = futureMillis(60000);  // check every 1 minute
+    uint32_t curr_time = getRTCClock()->getCurrentTime();
+    for (int i = acl.getNumClients() - 1; i >= 0; i--) {
+      auto c = acl.getClientByIdx(i);
+      if (!c->isAdmin() && c->last_activity > 0 && (curr_time - c->last_activity > MAX_CLIENT_INACTIVE_SECS)) {
+        MESH_DEBUG_PRINTLN("Evicting inactive client %02X", (uint32_t)c->id.pub_key[0]);
+        acl.removeClient(i);
+        if (next_client_idx >= acl.getNumClients()) {
+           next_client_idx = 0;
+        }
+      }
+    }
+  }
 
   // update uptime
   uint32_t now = millis();
