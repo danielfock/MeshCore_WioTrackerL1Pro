@@ -672,10 +672,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     memcpy(&out_frame[i], extra, extra_len);
     i += extra_len;
   }
-  int tlen = strlen(text); // TODO: UTF-8 ??
-  if (i + tlen > MAX_FRAME_SIZE) {
-    tlen = MAX_FRAME_SIZE - i;
-  }
+  int tlen = StrHelper::getUtf8TruncatedLen(text, MAX_FRAME_SIZE - i);
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
   addToOfflineQueue(out_frame, i);
@@ -699,9 +696,23 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
 }
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
-  // REVISIT: try to determine which Region (from transport_codes[1]) that Sender is indicating for replies/responses
-  //    if unknown, fallback to finding Region from transport_codes[0], the 'scope' used by Sender
+  has_recv_pkt_scope = false;
+  recv_pkt_ptr = nullptr;
+  if (_scope_resolver) {
+    if (_scope_resolver->resolvePacketToScope(packet, recv_pkt_scope)) {
+      has_recv_pkt_scope = true;
+      recv_pkt_ptr = packet;
+    }
+  }
   return false;
+}
+
+void MyMesh::onContactPacketRecv(ContactInfo& from, mesh::Packet* packet) {
+  if (_scope_resolver && has_recv_pkt_scope && recv_pkt_ptr == packet) {
+    _scope_resolver->recordContactRegion(from, recv_pkt_scope);
+    has_recv_pkt_scope = false;
+    recv_pkt_ptr = nullptr;
+  }
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet* packet) {
@@ -728,19 +739,30 @@ void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint3
 }
 
 void MyMesh::sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis) {
-  // TODO: dynamic send_scope, depending on recipient and current 'home' Region
+  if (!send_scope.isNull()) {
+    sendFloodScoped(send_scope, pkt, delay_millis);
+    return;
+  }
+
+  TransportKey resolved_key;
+  if (_scope_resolver && _scope_resolver->resolveScope(recipient, resolved_key)) {
+    sendFloodScoped(resolved_key, pkt, delay_millis);
+    return;
+  }
+
   TransportKey default_scope;
   memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
-
-  auto scope = send_scope.isNull() ? &default_scope : &send_scope;
-  sendFloodScoped(*scope, pkt, delay_millis);
+  sendFloodScoped(default_scope, pkt, delay_millis);
 }
 void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis) {
-  // TODO: have per-channel send_scope
   TransportKey default_scope;
-  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
-
-  auto scope = send_scope.isNull() ? &default_scope : &send_scope;
+  const TransportKey* scope;
+  if (!channel.send_scope.isNull()) {
+    scope = &channel.send_scope;
+  } else {
+    memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+    scope = send_scope.isNull() ? &default_scope : &send_scope;
+  }
   sendFloodScoped(*scope, pkt, delay_millis);
 }
 
@@ -1296,10 +1318,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   out_frame[i++] = TXT_TYPE_PLAIN;
   memcpy(&out_frame[i], &timestamp, 4);
   i += 4;
-  int tlen = strlen(text); // TODO: UTF-8 ??
-  if (i + tlen > MAX_FRAME_SIZE) {
-    tlen = MAX_FRAME_SIZE - i;
-  }
+  int tlen = StrHelper::getUtf8TruncatedLen(text, MAX_FRAME_SIZE - i);
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
   addToOfflineQueue(out_frame, i);
@@ -1484,7 +1503,7 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
   }
 }
 
-bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) {
+bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len, uint32_t path_timestamp) {
   if (extra_type == PAYLOAD_TYPE_RESPONSE && extra_len > 4) {
     uint32_t tag;
     memcpy(&tag, extra, 4);
@@ -1512,7 +1531,7 @@ bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t i
     }
   }
   // let base class handle received path and data
-  return BaseChatMesh::onContactPathRecv(contact, in_path, in_path_len, out_path, out_path_len, extra_type, extra, extra_len);
+  return BaseChatMesh::onContactPathRecv(contact, in_path, in_path_len, out_path, out_path_len, extra_type, extra, extra_len, path_timestamp);
 }
 
 void MyMesh::onControlDataRecv(mesh::Packet *packet) {
@@ -1597,13 +1616,13 @@ uint32_t MyMesh::calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t
 
 void MyMesh::onSendTimeout() {}
 
-MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
+MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui, MeshScopeResolver* scope_resolver)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store)
 #if FEATURE_GPS_TRACKER
       , _gps_tracker_store(store)
 #endif
-      , _ui(ui) {
+      , _ui(ui), _scope_resolver(scope_resolver), recv_pkt_ptr(nullptr), has_recv_pkt_scope(false) {
   _iter_started = false;
   _cli_rescue = false;
   offline_queue_len = 0;
@@ -2457,6 +2476,8 @@ void MyMesh::handleCmdFrame(size_t len) {
       i += 32;
       memcpy(&out_frame[i], channel.channel.secret, 16);
       i += 16; // NOTE: only 128-bit supported
+      memcpy(&out_frame[i], channel.channel.send_scope.key, 16);
+      i += 16;
       _serial->writeFrame(out_frame, i);
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND);
@@ -2469,6 +2490,11 @@ void MyMesh::handleCmdFrame(size_t len) {
     StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
     memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
     memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
+    if (len >= 2 + 32 + 16 + 16) {
+      memcpy(channel.channel.send_scope.key, &cmd_frame[2 + 32 + 16], 16);
+    } else {
+      memset(channel.channel.send_scope.key, 0, 16);
+    }
     if (setChannel(channel_idx, channel)) {
       saveChannels();
       writeOKFrame();

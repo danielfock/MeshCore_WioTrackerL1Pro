@@ -118,18 +118,22 @@ ClientInfo* ClientACL::putClient(const mesh::Identity& id, uint8_t init_perms) {
   return c;
 }
 
+bool ClientACL::removeClient(int idx) {
+  if (idx < 0 || idx >= num_clients) return false;
+  num_clients--;
+  for (int i = idx; i < num_clients; i++) {
+    clients[i] = clients[i + 1];
+  }
+  return true;
+}
+
 bool ClientACL::applyPermissions(const mesh::LocalIdentity& self_id, const uint8_t* pubkey, int key_len, uint8_t perms) {
   ClientInfo* c;
   if ((perms & PERM_ACL_ROLE_MASK) == PERM_ACL_GUEST) {  // guest role is not persisted in contacts
     c = getClient(pubkey, key_len);
     if (c == NULL) return false;   // partial pubkey not found
 
-    num_clients--;   // delete from contacts[]
-    int i = c - clients;
-    while (i < num_clients) {
-      clients[i] = clients[i + 1];
-      i++;
-    }
+    removeClient(c - clients);
   } else {
     if (key_len < PUB_KEY_SIZE) return false;   // need complete pubkey when adding/modifying
 

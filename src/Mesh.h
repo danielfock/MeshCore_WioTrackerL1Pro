@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Dispatcher.h>
+#include <helpers/TransportKeyStore.h>
 
 namespace mesh {
 
@@ -8,6 +9,7 @@ class GroupChannel {
 public:
   uint8_t hash[PATH_HASH_SIZE];
   uint8_t secret[PUB_KEY_SIZE];
+  TransportKey send_scope;
 };
 
 /**
@@ -112,7 +114,7 @@ protected:
    * \param  secret   the pre-calculated shared-secret (handy for sending response packet)
    * \returns   true, if path was accepted and that reciprocal path should be sent
   */
-  virtual bool onPeerPathRecv(Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) { return false; }
+  virtual bool onPeerPathRecv(Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len, uint32_t path_timestamp = 0) { return false; }
 
   /**
    * \brief  A new incoming Advertisement has been received.
